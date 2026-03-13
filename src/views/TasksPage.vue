@@ -1,0 +1,546 @@
+<script setup lang="ts">
+import { computed } from 'vue'
+import { useAppStore, formatDateTime } from '@/stores/app'
+import { useAuthStore } from '@/stores/auth'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import SnapshotTaskFormDialog from '@/components/tasks/SnapshotTaskFormDialog.vue'
+import TaskDetailDialog from '@/components/tasks/TaskDetailDialog.vue'
+import DeviceExecDialog from '@/components/tasks/DeviceExecDialog.vue'
+import { flattenGroupOptions, groupTree as initialGroupTree, type TreeNode } from '@/utils/devicesCamerasMock'
+import {
+  cloudStatus,
+  loadDeviceRuns,
+  loadTaskRuns,
+  persistDeviceRuns,
+  persistTaskRuns,
+  syncImagesToCloud,
+  syncTasksFromCloud,
+} from '@/utils/taskCloudSync'
+import {
+  makeMockDeviceRuns,
+  makeMockRuns,
+  makeMockTasks,
+  type DeviceRun,
+  type RunStatus,
+  type SnapshotTask,
+  type SnapshotTaskStatus,
+  type SyncStatus,
+  type TaskSyncMode,
+  type TaskRun,
+} from '@/utils/tasksMock'
+
+type FilterModel = {
+  keyword: string
+  status: '' | SnapshotTaskStatus
+  syncStatus: '' | SyncStatus
+  syncMode: '' | TaskSyncMode
+  lastRunStatus: '' | RunStatus
+  range: [Date, Date] | null
+}
+
+const app = useAppStore()
+
+const filter = reactive<FilterModel>({
+  keyword: '',
+  status: '',
+  syncStatus: '',
+  syncMode: '',
+  lastRunStatus: '',
+  range: null,
+})
+
+const followGlobalRange = ref(true)
+const internalUpdatingRange = ref(false)
+
+function setRangeFromGlobal() {
+  internalUpdatingRange.value = true
+  filter.range = [new Date(app.timeRange.fromMs), new Date(app.timeRange.toMs)]
+  internalUpdatingRange.value = false
+}
+
+const loading = ref(false)
+const page = ref(1)
+const pageSize = ref(10)
+const total = ref(0)
+
+const fullData = ref<SnapshotTask[]>([])
+const mockWindowKey = ref('')
+
+const TASKS_KEY = 'edge_tasks_v1'
+const GROUPS_KEY = 'edge_camera_groups_v1'
+
+function loadGroupTree(): TreeNode[] {
+  try {
+    const raw = window.localStorage.getItem(GROUPS_KEY)
+    if (raw) {
+      const parsed = JSON.parse(raw)
+      if (Array.isArray(parsed)) return parsed as TreeNode[]
+    }
+  } catch {
+    return initialGroupTree
+  }
+  return initialGroupTree
+}
+
+const groupTree = ref<TreeNode[]>(loadGroupTree())
+const groupOptions = computed(() => flattenGroupOptions(groupTree.value))
+
+function loadTasks() {
+  try {
+    const raw = window.localStorage.getItem(TASKS_KEY)
+    if (!raw) return [] as SnapshotTask[]
+    const parsed = JSON.parse(raw)
+    return Array.isArray(parsed) ? (parsed as SnapshotTask[]) : ([] as SnapshotTask[])
+  } catch {
+    return [] as SnapshotTask[]
+  }
+}
+
+function saveTasks(list: SnapshotTask[]) {
+  try {
+    window.localStorage.setItem(TASKS_KEY, JSON.stringify(list))
+  } catch {
+    return
+  }
+}
+
+function normalizeTask(t: SnapshotTask): SnapshotTask {
+  const groupLabel = groupOptions.value.find((g) => g.id === t.groupId)?.label || t.groupLabel || '—'
+  const deviceIds = Array.isArray((t as any).deviceIds) ? (t as any).deviceIds : []
+  const planType = (t as any).planType || '周计划'
+  const syncMode = (t as any).syncMode || '自动同步'
+  const weekPlan = (t as any).weekPlan || {
+    mon: [],
+    tue: [],
+    wed: [],
+    thu: [],
+    fri: [],
+    sat: [],
+    sun: [],
+  }
+  const holidayPlan = Array.isArray((t as any).holidayPlan) ? (t as any).holidayPlan : []
+
+  return {
+    ...t,
+    groupLabel,
+    deviceIds,
+    deviceCount: deviceIds.length ? deviceIds.length : t.deviceCount,
+    planType,
+    weekPlan,
+    holidayPlan,
+    syncMode,
+  }
+}
+
+const auth = useAuthStore()
+const canCreateLocal = computed(() => auth.hasPermission('tasks.create'))
+
+const syncingTasks = ref(false)
+const syncingImages = ref(false)
+
+async function syncTasks() {
+  const { mqttReady } = cloudStatus()
+  if (!mqttReady) {
+    ElMessage.warning('请先在「系统管理-云平台对接」完成 MQTT 配置并启用')
+    return
+  }
+  syncingTasks.value = true
+  try {
+    await new Promise((r) => setTimeout(r, 420))
+    const r = syncTasksFromCloud({ count: 6 })
+    if (!r.ok) {
+      ElMessage.error(r.message)
+      return
+    }
+    fullData.value = loadTasks().map((t) => normalizeTask(t))
+    ElMessage.success(`已同步云端任务 ${r.count} 条（演示）`)
+    refresh()
+  } finally {
+    syncingTasks.value = false
+  }
+}
+
+async function syncImages() {
+  const { mqttReady, ossReady } = cloudStatus()
+  if (!mqttReady || !ossReady) {
+    ElMessage.warning('请先在「系统管理-云平台对接」启用并配置 MQTT + OSS')
+    return
+  }
+  syncingImages.value = true
+  try {
+    await new Promise((r) => setTimeout(r, 520))
+    const r = syncImagesToCloud({ maxCount: 80 })
+    if (!r.ok) {
+      ElMessage.error(r.message)
+      return
+    }
+    ElMessage.success(r.changed ? `图片同步完成：${r.changed} 条（演示）` : '图片同步完成：无待同步（演示）')
+  } finally {
+    syncingImages.value = false
+  }
+}
+
+function ensureMockDataInRange() {
+  if (!filter.range) return
+
+  if (!fullData.value.length) {
+    const stored = loadTasks().map((t) => normalizeTask(t))
+    if (stored.length) {
+      fullData.value = stored
+      return
+    }
+  }
+  const [from, to] = filter.range
+  const key = `${from.getTime()}-${to.getTime()}`
+  if (mockWindowKey.value === key && fullData.value.length) return
+
+  mockWindowKey.value = key
+  fullData.value = makeMockTasks({
+    fromMs: from.getTime(),
+    toMs: to.getTime(),
+    groups: groupOptions.value,
+    count: 12,
+  }).map((t) => normalizeTask(t))
+  saveTasks(fullData.value)
+}
+
+function applyFilter(data: SnapshotTask[]) {
+  const kw = filter.keyword.trim()
+  return data
+    .filter((t) => (kw ? t.id.includes(kw) || t.name.includes(kw) : true))
+    .filter((t) => (filter.status ? t.status === filter.status : true))
+    .filter((t) => (filter.syncStatus ? t.syncStatus === filter.syncStatus : true))
+    .filter((t) => (filter.syncMode ? t.syncMode === filter.syncMode : true))
+    .filter((t) => (filter.lastRunStatus ? t.lastRunStatus === filter.lastRunStatus : true))
+    .sort((a, b) => b.updatedAtMs - a.updatedAtMs)
+}
+
+const rows = ref<SnapshotTask[]>([])
+
+async function fetchData() {
+  loading.value = true
+  try {
+    await new Promise((r) => setTimeout(r, 240))
+    ensureMockDataInRange()
+    const filtered = applyFilter(fullData.value)
+    total.value = filtered.length
+    const start = (page.value - 1) * pageSize.value
+    return filtered.slice(start, start + pageSize.value)
+  } finally {
+    loading.value = false
+  }
+}
+
+async function refresh() {
+  rows.value = await fetchData()
+}
+
+function onSearch() {
+  page.value = 1
+  refresh()
+}
+
+function onReset() {
+  filter.keyword = ''
+  filter.status = ''
+  filter.syncStatus = ''
+  filter.syncMode = ''
+  filter.lastRunStatus = ''
+  followGlobalRange.value = true
+  setRangeFromGlobal()
+  page.value = 1
+  refresh()
+}
+
+watch([page, pageSize], () => refresh())
+
+watch(
+  () => filter.range,
+  (v) => {
+    if (internalUpdatingRange.value) return
+    if (!v) {
+      followGlobalRange.value = true
+      setRangeFromGlobal()
+      return
+    }
+    followGlobalRange.value = false
+  }
+)
+
+watch(
+  () => app.timeRange,
+  () => {
+    if (!followGlobalRange.value) return
+    setRangeFromGlobal()
+    ensureMockDataInRange()
+    page.value = 1
+    refresh()
+  },
+  { deep: true }
+)
+
+onMounted(() => {
+  setRangeFromGlobal()
+  ensureMockDataInRange()
+  refresh()
+})
+
+function tagTypeForRun(status: RunStatus) {
+  if (status === '成功') return 'success'
+  if (status === '失败') return 'danger'
+  return 'warning'
+}
+
+const formOpen = ref(false)
+const editing = ref<SnapshotTask | null>(null)
+
+function openCreate() {
+  if (!canCreateLocal.value) {
+    ElMessage.warning('当前角色无本地创建权限')
+    return
+  }
+  editing.value = null
+  formOpen.value = true
+}
+
+function openEdit(t: SnapshotTask) {
+  editing.value = { ...t }
+  formOpen.value = true
+}
+
+function upsertTask(t: SnapshotTask) {
+  const idx = fullData.value.findIndex((x) => x.id === t.id)
+  if (idx >= 0) fullData.value[idx] = t
+  else fullData.value.unshift(t)
+  saveTasks(fullData.value)
+  refresh()
+}
+
+async function removeTask(t: SnapshotTask) {
+  const confirmed = await ElMessageBox.confirm(`确认删除任务 ${t.name}？`, '删除确认', {
+    type: 'warning',
+    confirmButtonText: '删除',
+    cancelButtonText: '取消',
+  })
+    .then(() => true)
+    .catch(() => false)
+  if (!confirmed) return
+  fullData.value = fullData.value.filter((x) => x.id !== t.id)
+  saveTasks(fullData.value)
+  ElMessage.success('已删除')
+  refresh()
+}
+
+async function syncTask(t: SnapshotTask) {
+  const confirmed1 = await ElMessageBox.confirm(
+    `同步会将任务下发到边缘节点并覆盖同名配置，是否继续？`,
+    '同步任务（1/2）',
+    {
+      type: 'warning',
+      confirmButtonText: '继续',
+      cancelButtonText: '取消',
+    }
+  )
+    .then(() => true)
+    .catch(() => false)
+  if (!confirmed1) return
+
+  const { value, action } = await ElMessageBox.prompt(
+    `请输入任务ID（${t.id}）以确认同步：`,
+    '同步任务（2/2）',
+    {
+      confirmButtonText: '确认同步',
+      cancelButtonText: '取消',
+      inputPlaceholder: t.id,
+    }
+  ).catch(() => ({ value: '', action: 'cancel' as const }))
+
+  if (action !== 'confirm') return
+  if (String(value).trim() !== t.id) {
+    ElMessage.error('任务ID不匹配，已取消同步')
+    return
+  }
+
+  const idx = fullData.value.findIndex((x) => x.id === t.id)
+  if (idx < 0) return
+  await new Promise((r) => setTimeout(r, 450))
+  fullData.value[idx] = { ...fullData.value[idx], syncStatus: '已同步', updatedAtMs: Date.now() }
+  saveTasks(fullData.value)
+  ElMessage.success('同步已提交（占位）')
+  refresh()
+}
+
+const detailOpen = ref(false)
+const selected = ref<SnapshotTask | null>(null)
+const runs = ref<TaskRun[]>([])
+const deviceOpen = ref(false)
+const deviceRows = ref<DeviceRun[]>([])
+const selectedRun = ref<TaskRun | null>(null)
+
+async function openDetail(t: SnapshotTask) {
+  selected.value = t
+  detailOpen.value = true
+  if (!filter.range) return
+  const [from, to] = filter.range
+  const stored = loadTaskRuns(t.id)
+  if (stored.length) {
+    runs.value = stored
+    return
+  }
+  const gen = makeMockRuns({ taskId: t.id, fromMs: from.getTime(), toMs: to.getTime(), count: 14 })
+  runs.value = gen
+  persistTaskRuns(t.id, gen)
+}
+
+function openDeviceRun(payload: { run: TaskRun }) {
+  if (!selected.value) return
+  selectedRun.value = payload.run
+  const stored = loadDeviceRuns(payload.run.id)
+  if (stored.length) {
+    deviceRows.value = stored
+    deviceOpen.value = true
+    return
+  }
+  const gen = makeMockDeviceRuns({
+    taskId: selected.value.id,
+    runId: payload.run.id,
+    startedAtMs: payload.run.startedAtMs,
+    deviceCount: selected.value.deviceCount,
+  })
+  deviceRows.value = gen
+  persistDeviceRuns(payload.run.id, gen)
+  deviceOpen.value = true
+}
+</script>
+
+<template>
+  <div class="space-y-4">
+    <div class="flex flex-wrap items-end justify-between gap-3">
+      <div>
+        <div class="text-base font-semibold">任务管理（抓图任务）</div>
+        <div class="mt-1 text-xs text-zinc-500">支持筛选、同步二次确认与执行记录（演示）。</div>
+      </div>
+      <div class="flex items-center gap-2">
+        <el-button :loading="syncingTasks" @click="syncTasks">同步任务</el-button>
+        <el-button :loading="syncingImages" @click="syncImages">图片同步</el-button>
+        <el-button type="primary" :disabled="!canCreateLocal" @click="openCreate">新增任务</el-button>
+      </div>
+    </div>
+
+    <el-card>
+      <div class="grid grid-cols-1 gap-3 md:grid-cols-7">
+        <el-input v-model="filter.keyword" placeholder="任务名称/ID" clearable />
+        <el-select v-model="filter.status" placeholder="任务状态" clearable>
+          <el-option label="已启用" value="已启用" />
+          <el-option label="已停用" value="已停用" />
+        </el-select>
+        <el-select v-model="filter.syncStatus" placeholder="同步状态" clearable>
+          <el-option label="已同步" value="已同步" />
+          <el-option label="待同步" value="待同步" />
+          <el-option label="同步失败" value="同步失败" />
+        </el-select>
+        <el-select v-model="filter.syncMode" placeholder="同步方式" clearable>
+          <el-option label="自动同步" value="自动同步" />
+          <el-option label="本地创建" value="本地创建" />
+        </el-select>
+        <el-select v-model="filter.lastRunStatus" placeholder="最近结果" clearable>
+          <el-option label="成功" value="成功" />
+          <el-option label="失败" value="失败" />
+          <el-option label="执行中" value="执行中" />
+        </el-select>
+        <el-date-picker
+          v-model="filter.range"
+          type="daterange"
+          unlink-panels
+          range-separator="~"
+          start-placeholder="开始"
+          end-placeholder="结束"
+        />
+        <div class="flex items-center justify-end gap-2">
+          <el-button @click="onReset">重置</el-button>
+          <el-button type="primary" :loading="loading" @click="onSearch">搜索</el-button>
+        </div>
+      </div>
+    </el-card>
+
+    <el-card>
+      <el-table :data="rows" size="small" v-loading="loading" height="560" class="table-standard">
+        <el-table-column prop="name" label="任务名称" min-width="240" />
+        <el-table-column label="任务ID" min-width="170">
+          <template #default="scope">
+            <span class="font-mono text-xs">{{ scope.row.id }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column prop="groupLabel" label="分组" width="110" />
+        <el-table-column label="设备数" width="90">
+          <template #default="scope">
+            <span class="font-mono text-xs">{{ scope.row.deviceCount }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column prop="syncMode" label="同步方式" width="100" />
+        <el-table-column label="周期" width="110">
+          <template #default="scope">
+            <span class="text-xs">每 {{ scope.row.intervalMin }} 分钟</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="状态" width="90">
+          <template #default="scope">
+            <el-tag :type="scope.row.status === '已启用' ? 'success' : 'info'" size="small">{{ scope.row.status }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="同步" width="90">
+          <template #default="scope">
+            <el-tag
+              :type="scope.row.syncStatus === '已同步' ? 'success' : scope.row.syncStatus === '待同步' ? 'warning' : 'danger'"
+              size="small"
+            >
+              {{ scope.row.syncStatus }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="最近执行" width="160">
+          <template #default="scope">
+            <span class="text-xs text-zinc-600">{{ formatDateTime(scope.row.lastRunAtMs) }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="最近结果" width="90">
+          <template #default="scope">
+            <el-tag :type="tagTypeForRun(scope.row.lastRunStatus)" size="small">{{ scope.row.lastRunStatus }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="220" fixed="right">
+          <template #default="scope">
+            <div class="flex items-center gap-2">
+              <el-button link type="primary" size="small" @click="openDetail(scope.row)">详情</el-button>
+              <el-button link type="primary" size="small" @click="openEdit(scope.row)">编辑</el-button>
+              <el-button link type="primary" size="small" @click="syncTask(scope.row)">同步</el-button>
+              <el-dropdown trigger="click">
+                <el-button link type="primary" size="small">更多</el-button>
+                <template #dropdown>
+                  <el-dropdown-menu>
+                    <el-dropdown-item @click="removeTask(scope.row)">删除</el-dropdown-item>
+                  </el-dropdown-menu>
+                </template>
+              </el-dropdown>
+            </div>
+          </template>
+        </el-table-column>
+      </el-table>
+
+      <div class="mt-3 flex justify-end">
+        <el-pagination
+          v-model:current-page="page"
+          v-model:page-size="pageSize"
+          :total="total"
+          layout="total, prev, pager, next, sizes"
+          :page-sizes="[10, 20, 50]"
+          small
+        />
+      </div>
+    </el-card>
+
+    <SnapshotTaskFormDialog v-model="formOpen" :initial="editing" :groups="groupOptions" @saved="upsertTask" />
+    <TaskDetailDialog v-model="detailOpen" :task="selected" :runs="runs" @open-device-run="openDeviceRun" />
+    <DeviceExecDialog v-model="deviceOpen" :task="selected" :run="selectedRun" :devices="deviceRows" />
+  </div>
+</template>

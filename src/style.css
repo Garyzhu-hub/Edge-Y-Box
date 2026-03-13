@@ -1,0 +1,30 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  font-family:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica,
+    Arial, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji';
+  line-height: 1.5;
+  font-weight: 400;
+
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+
+  --edge-table-row-height: 72px;
+}
+
+.table-standard .el-table__body td.el-table__cell {
+  height: var(--edge-table-row-height);
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
+.table-standard .el-table__body td.el-table__cell > .cell {
+  height: var(--edge-table-row-height);
+  display: flex;
+  align-items: center;
+}
