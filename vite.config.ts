@@ -9,6 +9,7 @@ import { ElementPlusResolver } from 'unplugin-vue-components/resolvers'
 
 // https://vite.dev/config/
 export default defineConfig({
+  base: '/Edge-Y-Box/',
   build: {
     sourcemap: 'hidden',
   },
