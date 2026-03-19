@@ -3,7 +3,16 @@ import { computed } from 'vue'
 import { formatDateTime } from '@/stores/app'
 import type { GbCascadePlatform, GbStatus } from '@/utils/gbCascadeMock'
 
-export type GbStatusEvent = { tsMs: number; status: GbStatus }
+export type GbStatusEventAction = '注册' | '注销' | '心跳恢复' | '心跳超时' | '状态校验' | '通道同步' | '通道共享'
+export type GbStatusEvent = {
+  tsMs: number
+  status: GbStatus
+  action?: GbStatusEventAction
+  reason?: string
+  latencyMs?: number
+  operator?: string
+  requestId?: string
+}
 
 const props = defineProps<{ modelValue: boolean; platform: GbCascadePlatform | null; events: GbStatusEvent[] }>()
 const emit = defineEmits<{ (e: 'update:modelValue', v: boolean): void }>()
@@ -57,11 +66,21 @@ const sorted = computed(() => props.events.slice().sort((a, b) => b.tsMs - a.tsM
       <el-timeline v-else>
         <el-timeline-item
           v-for="e in sorted"
-          :key="`${e.tsMs}-${e.status}`"
+          :key="`${e.tsMs}-${e.status}-${e.action || ''}`"
           :timestamp="formatDateTime(e.tsMs)"
           placement="top"
         >
-          <el-tag :type="tagType(e.status)" size="small">{{ e.status }}</el-tag>
+          <div class="space-y-1">
+            <div class="flex flex-wrap items-center gap-2">
+              <el-tag :type="tagType(e.status)" size="small">{{ e.status }}</el-tag>
+              <el-tag v-if="e.action" size="small">{{ e.action }}</el-tag>
+              <span v-if="typeof e.latencyMs === 'number'" class="text-xs text-zinc-500">耗时 {{ e.latencyMs }}ms</span>
+            </div>
+            <div v-if="e.reason" class="text-xs text-zinc-600">{{ e.reason }}</div>
+            <div v-if="e.operator || e.requestId" class="text-xs text-zinc-500">
+              {{ e.operator || 'admin' }}<span v-if="e.requestId"> · {{ e.requestId }}</span>
+            </div>
+          </div>
         </el-timeline-item>
       </el-timeline>
     </div>
@@ -71,4 +90,3 @@ const sorted = computed(() => props.events.slice().sort((a, b) => b.tsMs - a.tsM
     </template>
   </el-dialog>
 </template>
-

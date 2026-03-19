@@ -11,8 +11,10 @@ import {
   cloudStatus,
   loadDeviceRuns,
   loadTaskRuns,
+  publishTaskToCloud,
   persistDeviceRuns,
   persistTaskRuns,
+  reportResultsToCloud,
   syncImagesToCloud,
   syncTasksFromCloud,
 } from '@/utils/taskCloudSync'
@@ -153,7 +155,7 @@ async function syncTasks() {
       return
     }
     fullData.value = loadTasks().map((t) => normalizeTask(t))
-    ElMessage.success(`已同步云端任务 ${r.count} 条（演示）`)
+    ElMessage.success(`已通过 MQTT 入站同步任务 ${r.count} 条（演示）`)
     refresh()
   } finally {
     syncingTasks.value = false
@@ -169,12 +171,18 @@ async function syncImages() {
   syncingImages.value = true
   try {
     await new Promise((r) => setTimeout(r, 520))
-    const r = syncImagesToCloud({ maxCount: 80 })
-    if (!r.ok) {
-      ElMessage.error(r.message)
+    const upload = syncImagesToCloud({ maxCount: 80 })
+    if (!upload.ok) {
+      ElMessage.error(upload.message)
       return
     }
-    ElMessage.success(r.changed ? `图片同步完成：${r.changed} 条（演示）` : '图片同步完成：无待同步（演示）')
+    const report = reportResultsToCloud({ maxCount: 120 })
+    if (!report.ok) {
+      ElMessage.error(report.message)
+      return
+    }
+    const summary = `上传成功${upload.uploaded}，上传失败${upload.failed}；上报成功${report.reported}，上报失败${report.failed}`
+    ElMessage.success(`云端同步完成：${summary}（演示）`)
   } finally {
     syncingImages.value = false
   }
@@ -364,9 +372,15 @@ async function syncTask(t: SnapshotTask) {
   const idx = fullData.value.findIndex((x) => x.id === t.id)
   if (idx < 0) return
   await new Promise((r) => setTimeout(r, 450))
-  fullData.value[idx] = { ...fullData.value[idx], syncStatus: '已同步', updatedAtMs: Date.now() }
+  const pushed = publishTaskToCloud(fullData.value[idx])
+  fullData.value[idx] = {
+    ...fullData.value[idx],
+    syncStatus: pushed.ok ? '已同步' : '同步失败',
+    updatedAtMs: Date.now(),
+  }
   saveTasks(fullData.value)
-  ElMessage.success('同步已提交（占位）')
+  if (pushed.ok) ElMessage.success('同步已提交：MQTT任务下发成功（演示）')
+  else ElMessage.error(`同步失败：${pushed.message}`)
   refresh()
 }
 

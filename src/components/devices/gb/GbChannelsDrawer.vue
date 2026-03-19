@@ -13,7 +13,10 @@ const props = defineProps<{
   initialTab?: 'list' | 'share'
   totalCount?: number
 }>()
-const emit = defineEmits<{ (e: 'update:modelValue', v: boolean): void }>()
+const emit = defineEmits<{
+  (e: 'update:modelValue', v: boolean): void
+  (e: 'preview', channel: LocalGbChannel): void
+}>()
 
 const open = computed({
   get: () => props.modelValue,
@@ -125,6 +128,10 @@ function onSaveShare() {
   ElMessage.success('已保存共享通道（演示）')
 }
 
+function onPreview(channel: LocalGbChannel) {
+  emit('preview', channel)
+}
+
 watch(
   () => open.value,
   (v) => {
@@ -224,6 +231,11 @@ watch(
       <el-table-column label="更新时间" width="160">
         <template #default="scope">
           <span class="text-xs text-zinc-600">{{ formatDateTime(scope.row.updatedAtMs) }}</span>
+        </template>
+      </el-table-column>
+      <el-table-column label="调阅" width="90" fixed="right">
+        <template #default="scope">
+          <el-button link type="primary" size="small" @click="onPreview(scope.row)">远程调阅</el-button>
         </template>
       </el-table-column>
     </el-table>

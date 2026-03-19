@@ -5,7 +5,6 @@ import RoiCanvasEditor from '@/components/deployments/RoiCanvasEditor.vue'
 import {
   defaultDeploymentParams,
   defaultInstanceParams,
-  makeAlgorithmOptions,
   makeCameraOptions,
   type AlgorithmInstance,
   type Deployment,
@@ -15,6 +14,7 @@ import {
   type RoiShape,
   type TimeSlot,
 } from '@/utils/deploymentsMock'
+import type { Algorithm } from '@/utils/algorithmsMock'
 
 const props = defineProps<{ modelValue: boolean; initial: Deployment | null }>()
 const emit = defineEmits<{
@@ -34,7 +34,54 @@ type FormModel = {
 }
 
 const cameraOptions = makeCameraOptions()
-const algorithmOptions = makeAlgorithmOptions()
+type Option = { id: string; label: string }
+
+const ALGORITHMS_KEY = 'edge_algorithms_v1'
+
+function loadAlgorithmsFromStorage(): Algorithm[] {
+  try {
+    const raw = window.localStorage.getItem(ALGORITHMS_KEY)
+    if (!raw) return []
+    const parsed = JSON.parse(raw)
+    return Array.isArray(parsed) ? (parsed as Algorithm[]) : []
+  } catch {
+    return []
+  }
+}
+
+function loadAlgorithmOptionsFromStorage(): Option[] {
+  try {
+    const raw = window.localStorage.getItem(ALGORITHMS_KEY)
+    if (!raw) return []
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    return (parsed as Algorithm[])
+      .filter((x) => x && typeof x.id === 'string' && typeof x.name === 'string')
+      .map((x) => ({ id: x.id, label: x.name }))
+      .sort((a, b) => a.label.localeCompare(b.label, 'zh-CN'))
+  } catch {
+    return []
+  }
+}
+
+function makeFallbackAlgorithmOptions(): Option[] {
+  return [
+    { id: 'ALG-10001', label: '安全帽检测' },
+    { id: 'ALG-10002', label: '离岗检测' },
+    { id: 'ALG-10003', label: '违停占道检测' },
+    { id: 'ALG-10004', label: '火焰识别' },
+    { id: 'ALG-10005', label: '公共区域卫生' },
+  ]
+}
+
+const algorithmOptions = ref<Option[]>([])
+const algorithmMetas = ref<Algorithm[]>([])
+
+function refreshAlgorithmOptions() {
+  algorithmMetas.value = loadAlgorithmsFromStorage()
+  const list = loadAlgorithmOptionsFromStorage()
+  algorithmOptions.value = list.length ? list : makeFallbackAlgorithmOptions()
+}
 
 const form = reactive<FormModel>({
   name: '',
@@ -57,6 +104,7 @@ const rules = {
 }
 
 function resetFromInitial() {
+  refreshAlgorithmOptions()
   if (!props.initial) {
     form.name = ''
     form.cameraId = cameraOptions[0]?.id || ''
@@ -77,6 +125,7 @@ function resetFromInitial() {
     : defaultDeploymentParams().timeSlots.map((s) => ({ ...s }))
   instances.value = props.initial.instances.map((x) => ({
     ...x,
+    algorithmName: algorithmOptions.value.find((a) => a.id === x.algorithmId)?.label || x.algorithmName,
     rois: x.rois.map((r) => ({
       ...r,
       enabled: typeof (r as any).enabled === 'boolean' ? (r as any).enabled : true,
@@ -588,6 +637,7 @@ watch(
       v-model="instanceDialogOpen"
       :initial="editingInstance"
       :algorithms="algorithmOptions"
+      :algorithm-metas="algorithmMetas"
       @saved="upsertInstance"
     />
 

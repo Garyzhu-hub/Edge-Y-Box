@@ -288,6 +288,19 @@ function ensureNvrCameraId(nvrId: string, channelNo: number) {
   return `CAM-NVR-${nvrId}-${String(channelNo).padStart(2, '0')}`
 }
 
+function makeGbId(seed: string, prefix = '3402000000132') {
+  const p = prefix.replace(/\D/g, '').slice(0, 19) || '3402000000132'
+  let h = 2166136261
+  for (let i = 0; i < seed.length; i++) {
+    h ^= seed.charCodeAt(i)
+    h = Math.imul(h, 16777619)
+  }
+  const suffixLen = Math.max(1, 20 - p.length)
+  const mod = Math.pow(10, suffixLen)
+  const suffix = String((h >>> 0) % mod).padStart(suffixLen, '0')
+  return `${p}${suffix}`.slice(0, 20)
+}
+
 function toCamera(nvr: Nvr, ch: NvrChannel): Camera {
   const id = ensureNvrCameraId(nvr.id, ch.channelNo)
   const port = nvr.protocol === 'HTTP' ? 80 : nvr.protocol === 'GB28181' ? 5060 : 554
@@ -308,6 +321,7 @@ function toCamera(nvr: Nvr, ch: NvrChannel): Camera {
     port,
     protocol: nvr.protocol,
     streamUrl,
+    gbDeviceId: nvr.protocol === 'GB28181' ? makeGbId(id) : '',
     username: nvr.username,
     password: '******',
     enabled: nvr.enabled,

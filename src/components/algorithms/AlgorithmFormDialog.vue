@@ -6,6 +6,7 @@ const props = defineProps<{ modelValue: boolean; initial: Algorithm | null }>()
 const emit = defineEmits<{
   (e: 'update:modelValue', v: boolean): void
   (e: 'saved', alg: Algorithm): void
+  (e: 'open-versions', alg: Algorithm): void
 }>()
 
 const open = computed({
@@ -19,7 +20,6 @@ type FormModel = {
   scene: string
   vendor: string
   modelFormat: string
-  packageName: string
   description: string
   remark: string
 }
@@ -30,7 +30,6 @@ const form = reactive<FormModel>({
   scene: '园区出入口',
   vendor: 'EdgeAI Lab',
   modelFormat: 'ONNX',
-  packageName: '',
   description: '',
   remark: '',
 })
@@ -51,7 +50,6 @@ function resetFromInitial() {
     form.scene = '园区出入口'
     form.vendor = 'EdgeAI Lab'
     form.modelFormat = 'ONNX'
-    form.packageName = ''
     form.description = ''
     form.remark = ''
     return
@@ -61,7 +59,6 @@ function resetFromInitial() {
   form.scene = props.initial.scene
   form.vendor = props.initial.vendor
   form.modelFormat = props.initial.modelFormat || 'ONNX'
-  form.packageName = props.initial.packageName || ''
   form.description = props.initial.description || ''
   form.remark = props.initial.remark || ''
 }
@@ -96,8 +93,8 @@ async function onSave() {
       vendor: form.vendor,
       currentVersion: props.initial?.currentVersion || 'v1.0.0',
       modelFormat: form.modelFormat,
-      packageName: form.packageName || undefined,
-      packageSource: props.initial?.packageSource || (form.packageName ? 'local_upload' : undefined),
+      packageName: props.initial?.packageName,
+      packageSource: props.initial?.packageSource,
       description: form.description || undefined,
       remark: form.remark || undefined,
       status: props.initial?.status || '已停用',
@@ -156,8 +153,29 @@ async function onSave() {
           </el-select>
         </el-form-item>
 
-        <el-form-item label="算法包文件" class="md:col-span-2">
-          <el-input v-model="form.packageName" placeholder="例如：helmet-detector_v1.0.0.onnx（上传占位）" />
+        <el-form-item label="算法包" class="md:col-span-2">
+          <div class="w-full space-y-2">
+            <div class="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-zinc-200 bg-zinc-50 p-3">
+              <div class="text-xs text-zinc-600">
+                <div>
+                  当前算法包：<span class="font-mono">{{ props.initial?.packageName || '—' }}</span>
+                </div>
+                <div class="mt-1 text-zinc-500">
+                  说明：上传新版本请在“版本管理”中执行，避免误解为修改当前版本的包。
+                </div>
+              </div>
+              <el-button
+                v-if="props.initial"
+                type="primary"
+                @click="emit('open-versions', props.initial)"
+              >
+                去版本管理上传新版本
+              </el-button>
+            </div>
+            <div v-if="!props.initial" class="text-xs text-zinc-500">
+              提示：新增算法保存后，请进入“版本管理”上传首个版本算法包。
+            </div>
+          </div>
         </el-form-item>
 
         <el-form-item label="算法描述" class="md:col-span-2">

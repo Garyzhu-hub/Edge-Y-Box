@@ -22,6 +22,7 @@ export type EvidenceRuleHit = {
 const props = defineProps({
   cameraLabel: { type: String, required: true },
   alarmType: { type: String, required: true },
+  algorithmVersion: { type: String, default: '' },
   level: { type: String, required: true },
   status: { type: String, required: true },
   alarmTimeMs: { type: Number, required: true },
@@ -95,6 +96,10 @@ const labeledHits = computed(() => {
       </el-descriptions-item>
       <el-descriptions-item label="报警类型">
         {{ alarmType }}
+      </el-descriptions-item>
+      <el-descriptions-item label="算法版本">
+        <span v-if="algorithmVersion" class="font-mono text-xs">{{ algorithmVersion }}</span>
+        <span v-else class="text-zinc-400">—</span>
       </el-descriptions-item>
       <el-descriptions-item label="等级">
         {{ level }}

@@ -4,11 +4,17 @@ import { computed, reactive, ref, watch } from 'vue'
 import { defaultInstanceParams, type AlgorithmInstance, type InstanceParams } from '@/utils/deploymentsMock'
 
 type Option = { id: string; label: string }
+type AlgorithmMeta = {
+  id: string
+  currentVersion?: string
+  versionHistory?: Array<{ version: string }>
+}
 
 const props = defineProps<{
   modelValue: boolean
   initial: AlgorithmInstance | null
   algorithms: Option[]
+  algorithmMetas?: AlgorithmMeta[]
 }>()
 
 const emit = defineEmits<{
@@ -23,14 +29,16 @@ const open = computed({
 
 type FormModel = {
   algorithmId: string
-  version: string
+  versionOverride: string
+  follow: boolean
   enabled: boolean
   params: InstanceParams
 }
 
 const form = reactive<FormModel>({
   algorithmId: '',
-  version: 'v1.0.0',
+  versionOverride: '',
+  follow: true,
   enabled: true,
   params: defaultInstanceParams(),
 })
@@ -41,20 +49,49 @@ const title = computed(() => (props.initial ? '编辑算法实例' : '新增算�
 
 const rules = {
   algorithmId: [{ required: true, message: '请选择算法', trigger: 'change' }],
-  version: [{ required: true, message: '请输入版本号', trigger: 'blur' }],
+  versionOverride: [
+    {
+      validator: (_: any, value: any, cb: any) => {
+        if (form.follow) return cb()
+        if (String(value || '').trim()) return cb()
+        cb(new Error('请选择/输入覆盖版本'))
+      },
+      trigger: 'blur',
+    },
+  ],
 }
+
+const metaById = computed(() => {
+  const list = Array.isArray(props.algorithmMetas) ? props.algorithmMetas : []
+  return new Map(list.map((x) => [x.id, x]))
+})
+
+const currentVersion = computed(() => {
+  const m = metaById.value.get(form.algorithmId)
+  return String(m?.currentVersion || '')
+})
+
+const historyOptions = computed(() => {
+  const m = metaById.value.get(form.algorithmId)
+  const versions = (m?.versionHistory || []).map((x) => String(x.version || '')).filter(Boolean)
+  const uniq = Array.from(new Set(versions))
+  return uniq
+})
 
 function resetFromInitial() {
   if (!props.initial) {
     form.algorithmId = props.algorithms[0]?.id || ''
-    form.version = 'v1.0.0'
+    form.follow = true
+    form.versionOverride = ''
     form.enabled = true
     form.params = defaultInstanceParams()
     loadPresetIfAny(form.algorithmId)
     return
   }
   form.algorithmId = props.initial.algorithmId
-  form.version = props.initial.version
+  const pinned = String(props.initial.version || '').trim()
+  form.follow = !pinned
+  form.versionOverride = pinned
   form.enabled = props.initial.enabled
   form.params = props.initial.params ? { ...props.initial.params } : defaultInstanceParams()
 }
@@ -132,11 +169,12 @@ async function onSave() {
     const presets = loadPresets()
     presets[form.algorithmId] = { ...form.params }
     savePresets(presets)
+    const pinned = form.follow ? '' : String(form.versionOverride || '').trim()
     emit('saved', {
       id: props.initial?.id || makeId(),
       algorithmId: form.algorithmId,
       algorithmName: alg ? alg.label : '—',
-      version: form.version,
+      version: pinned,
       enabled: form.enabled,
       rois: props.initial?.rois || [],
       params: { ...form.params },
@@ -157,8 +195,29 @@ async function onSave() {
           <el-option v-for="a in algorithms" :key="a.id" :label="a.label" :value="a.id" />
         </el-select>
       </el-form-item>
-      <el-form-item label="版本" prop="version">
-        <el-input v-model="form.version" placeholder="例如：v1.2.3" />
+      <el-form-item label="版本模式">
+        <el-radio-group v-model="form.follow">
+          <el-radio :label="true">跟随当前版本</el-radio>
+          <el-radio :label="false">覆盖版本</el-radio>
+        </el-radio-group>
+      </el-form-item>
+      <el-form-item v-if="form.follow" label="生效版本">
+        <div class="flex items-center gap-2">
+          <span class="font-mono text-xs">{{ currentVersion || '—' }}</span>
+          <el-tag size="small" type="info">盒子全局生效</el-tag>
+        </div>
+      </el-form-item>
+      <el-form-item v-else label="覆盖版本" prop="versionOverride">
+        <el-select
+          v-model="form.versionOverride"
+          placeholder="选择历史版本或输入"
+          filterable
+          allow-create
+          default-first-option
+          class="w-full"
+        >
+          <el-option v-for="v in historyOptions" :key="v" :label="v" :value="v" />
+        </el-select>
       </el-form-item>
       <el-form-item label="启用">
         <el-switch v-model="form.enabled" />

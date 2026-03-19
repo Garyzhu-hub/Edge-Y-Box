@@ -17,6 +17,7 @@ export type LocalGbChannel = {
 const CAMERAS_KEY = 'edge_cameras_v1'
 const GROUPS_KEY = 'edge_camera_groups_v1'
 const POOL_KEY = 'edge_gb_local_channels_v1'
+const GB_RULE_KEY = 'edge_camera_gb_id_rule_v1'
 
 function loadJson<T>(key: string, fallback: T): T {
   try {
@@ -75,9 +76,17 @@ export function loadLocalGbChannels(): LocalGbChannel[] {
   return Array.isArray(list) ? list : []
 }
 
+function loadGbPrefix() {
+  const parsed = loadJson<{ prefix?: string }>(GB_RULE_KEY, {})
+  const digits = String(parsed?.prefix || '').replace(/\D/g, '')
+  if (digits.length < 6) return '3402000000132'
+  return digits.slice(0, 19)
+}
+
 export function refreshLocalGbChannels(): LocalGbChannel[] {
   const cameras = loadJson<Camera[]>(CAMERAS_KEY, [])
   const groups = loadJson<TreeNode[]>(GROUPS_KEY, [])
+  const gbPrefix = loadGbPrefix()
   const now = Date.now()
 
   const list: LocalGbChannel[] = (Array.isArray(cameras) ? cameras : [])
@@ -85,7 +94,7 @@ export function refreshLocalGbChannels(): LocalGbChannel[] {
     .map((c) => {
       const status: LocalGbChannelStatus = c.enabled ? '在线' : '离线'
       return {
-        gbId: generateGbIdFromCamera(c.id),
+        gbId: c.gbDeviceId || generateGbIdFromCamera(c.id, gbPrefix),
         name: c.name,
         cameraId: c.id,
         cameraIp: c.ip,
@@ -100,4 +109,3 @@ export function refreshLocalGbChannels(): LocalGbChannel[] {
   saveJson(POOL_KEY, list)
   return list
 }
-

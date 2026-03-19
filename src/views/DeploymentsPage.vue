@@ -2,6 +2,7 @@
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { formatDateTime } from '@/stores/app'
 import DeploymentDialog from '@/components/deployments/DeploymentDialog.vue'
+import DeploymentResultsDialog from '@/components/deployments/DeploymentResultsDialog.vue'
 import {
   defaultDeploymentParams,
   defaultInstanceParams,
@@ -15,8 +16,10 @@ import { useAlarmCenterStore } from '@/stores/alarmCenter'
 import { loadAlarmSettings } from '@/utils/alarmSettingsStore'
 import { nextDetectionId } from '@/utils/detectionId'
 import { createWorkOrderFromAlarm, recoverWorkOrdersByCamera } from '@/utils/workOrdersStore'
+import type { Algorithm } from '@/utils/algorithmsMock'
 
 const STORAGE_KEY = 'edge_deployments_v1'
+const ALGORITHMS_KEY = 'edge_algorithms_v1'
 
 const loading = ref(false)
 const keyword = ref('')
@@ -84,6 +87,26 @@ const fullData = ref<Deployment[]>(loadPersisted())
 const rows = ref<Deployment[]>([])
 const alarmCenter = useAlarmCenterStore()
 
+function loadAlgorithmMap(): Map<string, Algorithm> {
+  try {
+    const raw = window.localStorage.getItem(ALGORITHMS_KEY)
+    if (!raw) return new Map()
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return new Map()
+    const list = parsed as Algorithm[]
+    return new Map(list.filter((x) => x && typeof x.id === 'string').map((x) => [x.id, x]))
+  } catch {
+    return new Map()
+  }
+}
+
+function effectiveAlgorithmVersion(ins: { algorithmId: string; version: string }) {
+  const pinned = String(ins.version || '').trim()
+  if (pinned) return pinned
+  const alg = loadAlgorithmMap().get(ins.algorithmId)
+  return String(alg?.currentVersion || '—')
+}
+
 function applyFilter(data: Deployment[]) {
   const kw = keyword.value.trim()
   return data
@@ -133,6 +156,8 @@ function statusTagType(s: DeploymentStatus) {
 
 const dialogOpen = ref(false)
 const editing = ref<Deployment | null>(null)
+const resultsOpen = ref(false)
+const viewing = ref<Deployment | null>(null)
 
 function openCreate() {
   editing.value = null
@@ -146,6 +171,11 @@ function openEdit(d: Deployment) {
     params: { ...d.params, timeSlots: (d.params.timeSlots || []).map((s) => ({ ...s })) },
   }
   dialogOpen.value = true
+}
+
+function openResults(d: Deployment) {
+  viewing.value = d
+  resultsOpen.value = true
 }
 
 function upsert(d: Deployment) {
@@ -285,6 +315,7 @@ async function simulateAlarm(d: Deployment) {
   const level = defaultLevelOfType(type)
   const nowMs = Date.now()
   const detectionId = nextDetectionId(new Date(nowMs))
+  const usedVersion = effectiveAlgorithmVersion(ins)
 
   const enabledRois = (ins.rois || []).filter((r) => r.enabled && Array.isArray(r.vertices) && r.vertices.length >= 3)
   const roi = enabledRois.length ? enabledRois[Math.floor(Math.random() * enabledRois.length)] : null
@@ -293,6 +324,7 @@ async function simulateAlarm(d: Deployment) {
     id: detectionId,
     cameraLabel: d.cameraLabel,
     alarmType: type,
+    algorithmVersion: usedVersion,
     level,
     status: '异常',
     alarmTimeMs: nowMs,
@@ -426,10 +458,11 @@ async function simulateRecover(d: Deployment) {
             <span class="text-xs text-zinc-600">{{ formatDateTime(scope.row.updatedAtMs) }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="220" fixed="right">
+        <el-table-column label="操作" width="280" fixed="right">
           <template #default="scope">
             <div class="flex items-center gap-2">
               <el-button link type="primary" size="small" @click="openEdit(scope.row)">编辑</el-button>
+              <el-button link type="primary" size="small" @click="openResults(scope.row)">查看结果</el-button>
               <el-button link type="primary" size="small" @click="toggleEnable(scope.row)">
                 {{ scope.row.status === '已启用' ? '停用' : '启用' }}
               </el-button>
@@ -471,5 +504,6 @@ async function simulateRecover(d: Deployment) {
     </el-card>
 
     <DeploymentDialog v-model="dialogOpen" :initial="editing" @saved="upsert" />
+    <DeploymentResultsDialog v-model="resultsOpen" :deployment="viewing" />
   </div>
 </template>

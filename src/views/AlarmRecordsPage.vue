@@ -4,9 +4,9 @@ import AlarmDetailDialog from '@/components/alarms/AlarmDetailDialog.vue'
 import { useRouter, useRoute } from 'vue-router'
 import { formatDateTime } from '@/stores/app'
 import { useAppStore } from '@/stores/app'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { createWorkOrderFromAlarm } from '@/utils/workOrdersStore'
-import { loadAlarmRecords, appendAlarmRecord } from '@/utils/alarmRecordsStore'
+import { loadAlarmRecords, appendAlarmRecord, loadDeletedAlarmRecordIds, removeAlarmRecordsByIds } from '@/utils/alarmRecordsStore'
 import { useAlarmCenterStore } from '@/stores/alarmCenter'
 
 type ViewMode = 'list' | 'grid'
@@ -65,6 +65,8 @@ const allLevels: AlarmLevel[] = ['一般', '警告', '严重', '紧急']
 const records = ref<AlarmRecord[]>([])
 
 const localRecords = ref<AlarmRecord[]>(loadAlarmRecords())
+const deletedIds = ref<string[]>(loadDeletedAlarmRecordIds())
+const selectedRows = ref<AlarmRecord[]>([])
 
 function mergeRecords(local: AlarmRecord[], mock: AlarmRecord[]) {
   const byId = new Map<string, AlarmRecord>()
@@ -186,8 +188,12 @@ async function fetchData() {
     ensureMockDataInRange()
 
     localRecords.value = loadAlarmRecords()
+    deletedIds.value = loadDeletedAlarmRecordIds()
 
-    const merged = mergeRecords(localRecords.value, fullData.value)
+    const deletedSet = new Set(deletedIds.value)
+    const merged = mergeRecords(localRecords.value, fullData.value).filter(
+      (x) => !deletedSet.has(x.id) && !deletedSet.has(x.detectionId)
+    )
     const filtered = applyFilter(merged)
     total.value = filtered.length
     const start = (page.value - 1) * pageSize.value
@@ -287,6 +293,50 @@ function createWorkOrder(r: AlarmRecord) {
   goWorkOrder(wo.id)
 }
 
+function onSelectionChange(list: AlarmRecord[]) {
+  selectedRows.value = list
+}
+
+async function deleteRecords(target: AlarmRecord[]) {
+  const list = (target || []).filter(Boolean)
+  if (!list.length) {
+    ElMessage.warning('请选择要删除的报警记录')
+    return
+  }
+  const withWorkOrder = list.filter((x) => x.workOrderId)
+  const tip = withWorkOrder.length
+    ? `\n其中 ${withWorkOrder.length} 条关联工单将保留，删除仅影响报警记录。`
+    : ''
+  const title = list.length > 1 ? `确认删除选中的 ${list.length} 条报警记录？` : `确认删除报警记录「${list[0].detectionId}」？`
+  const confirmed = await ElMessageBox.confirm(`${title}${tip}`, '删除确认', {
+    type: 'warning',
+    confirmButtonText: '删除',
+    cancelButtonText: '取消',
+  })
+    .then(() => true)
+    .catch(() => false)
+  if (!confirmed) return
+
+  const ids = list.map((x) => x.id)
+  removeAlarmRecordsByIds(ids)
+  selectedRows.value = []
+  if (selected.value && ids.includes(selected.value.id)) {
+    detailOpen.value = false
+    selected.value = null
+  }
+  ElMessage.success(`已删除 ${ids.length} 条报警记录`)
+  page.value = 1
+  fetchData()
+}
+
+function deleteOne(r: AlarmRecord) {
+  deleteRecords([r])
+}
+
+function deleteSelected() {
+  deleteRecords(selectedRows.value)
+}
+
 watch(
   () => app.timeRange,
   () => {
@@ -329,6 +379,7 @@ function tagType(level: AlarmLevel) {
       </div>
 
       <div class="flex items-center gap-2">
+        <el-button :disabled="!selectedRows.length || loading" @click="deleteSelected">删除选中</el-button>
         <el-button @click="testTrigger">触发测试告警</el-button>
         <el-segmented
           class="alarm-view-segmented"
@@ -378,7 +429,15 @@ function tagType(level: AlarmLevel) {
     </el-card>
 
     <el-card v-if="viewMode === 'list'">
-      <el-table :data="records" size="small" v-loading="loading" height="520" class="table-standard">
+      <el-table
+        :data="records"
+        size="small"
+        v-loading="loading"
+        height="520"
+        class="table-standard"
+        @selection-change="onSelectionChange"
+      >
+        <el-table-column type="selection" width="44" />
         <el-table-column label="分析图" width="120">
           <template #default="scope">
             <el-image
@@ -427,11 +486,12 @@ function tagType(level: AlarmLevel) {
             <span class="text-xs text-zinc-600">{{ formatDateTime(scope.row.alarmTimeMs) }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="90" fixed="right">
+        <el-table-column label="操作" width="150" fixed="right">
           <template #default="scope">
             <el-button link type="primary" size="small" @click="openDetail(scope.row)">
               查看详情
             </el-button>
+            <el-button link type="danger" size="small" @click="deleteOne(scope.row)">删除</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -474,16 +534,19 @@ function tagType(level: AlarmLevel) {
 
         <div class="mt-3 flex items-center justify-between">
           <span class="font-mono text-xs text-zinc-500">{{ r.detectionId }}</span>
-          <el-button
-            v-if="r.workOrderId"
-            link
-            type="primary"
-            size="small"
-            @click.stop="goWorkOrder(r.workOrderId)"
-          >
-            {{ r.workOrderId }}
-          </el-button>
-          <el-button v-else link type="primary" size="small" @click.stop="createWorkOrder(r)">生成工单</el-button>
+          <div class="flex items-center gap-1">
+            <el-button
+              v-if="r.workOrderId"
+              link
+              type="primary"
+              size="small"
+              @click.stop="goWorkOrder(r.workOrderId)"
+            >
+              {{ r.workOrderId }}
+            </el-button>
+            <el-button v-else link type="primary" size="small" @click.stop="createWorkOrder(r)">生成工单</el-button>
+            <el-button link type="danger" size="small" @click.stop="deleteOne(r)">删除</el-button>
+          </div>
         </div>
 
         <div class="mt-2 text-xs text-zinc-500">{{ formatDateTime(r.alarmTimeMs) }}</div>

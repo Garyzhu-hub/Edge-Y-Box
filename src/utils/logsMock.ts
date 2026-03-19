@@ -102,7 +102,7 @@ export function modulesByKind(kind: LogKind) {
   if (kind === 'operation') return ['任务管理', '告警工单', '摄像头管理', '算法管理', '布点管理', '用户与权限']
   if (kind === 'system') return ['边缘服务', '推理引擎', '存储服务', '调度器', '健康检查']
   if (kind === 'security') return ['认证', '授权', '审计', '策略', '密钥管理']
-  return ['GB28181', 'RTSP', 'ONVIF', 'MQTT', 'WebSocket']
+  return ['GB28181', 'RTSP', 'ONVIF', 'MQTT', 'WebSocket', 'SMS', 'Phone', 'CloudPush']
 }
 
 export function makeMockLogs(params: { kind: LogKind; fromMs: number; toMs: number; count?: number }) {

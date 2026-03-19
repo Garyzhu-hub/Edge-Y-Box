@@ -6,6 +6,7 @@ import { appendManualLog } from '@/utils/logsMock'
 import GbPlatformFormDialog from '@/components/devices/gb/GbPlatformFormDialog.vue'
 import GbChannelsDrawer from '@/components/devices/gb/GbChannelsDrawer.vue'
 import GbStatusTimelineDialog, { type GbStatusEvent } from '@/components/devices/gb/GbStatusTimelineDialog.vue'
+import GbRemotePreviewDialog from '@/components/devices/gb/GbRemotePreviewDialog.vue'
 import { loadLocalGbChannels, refreshLocalGbChannels, type LocalGbChannel } from '@/utils/gbLocalChannels'
 import { makeDefaultGbPlatforms, type GbCascadePlatform, type GbStatus } from '@/utils/gbCascadeMock'
 
@@ -34,12 +35,36 @@ const fullData = ref<GbCascadePlatform[]>([])
 const rows = ref<GbCascadePlatform[]>([])
 const localChannels = ref<LocalGbChannel[]>([])
 
+function normalizeEvent(raw: any): GbStatusEvent | null {
+  if (!raw || typeof raw !== 'object') return null
+  const tsMs = Number(raw.tsMs)
+  const status = raw.status as GbStatus
+  if (!Number.isFinite(tsMs)) return null
+  if (status !== '在线' && status !== '离线' && status !== '异常') return null
+  return {
+    tsMs,
+    status,
+    action: raw.action,
+    reason: raw.reason,
+    latencyMs: typeof raw.latencyMs === 'number' ? raw.latencyMs : undefined,
+    operator: raw.operator,
+    requestId: raw.requestId,
+  }
+}
+
 function loadHistory(): Record<string, GbStatusEvent[]> {
   try {
     const raw = window.localStorage.getItem(HISTORY_KEY)
     if (!raw) return {}
     const parsed = JSON.parse(raw)
-    return parsed && typeof parsed === 'object' ? (parsed as Record<string, GbStatusEvent[]>) : {}
+    if (!parsed || typeof parsed !== 'object') return {}
+    const map = parsed as Record<string, any[]>
+    const normalized: Record<string, GbStatusEvent[]> = {}
+    for (const [k, v] of Object.entries(map)) {
+      const list = Array.isArray(v) ? v.map((x) => normalizeEvent(x)).filter(Boolean) : []
+      normalized[k] = list as GbStatusEvent[]
+    }
+    return normalized
   } catch {
     return {}
   }
@@ -53,11 +78,25 @@ function saveHistory(next: Record<string, GbStatusEvent[]>) {
   }
 }
 
-function pushStatusEvent(platformId: string, status: GbStatus, tsMs = Date.now()) {
+function pushStatusEvent(
+  platformId: string,
+  status: GbStatus,
+  payload: { action?: GbStatusEvent['action']; reason?: string; latencyMs?: number; operator?: string; requestId?: string; tsMs?: number } = {}
+) {
   const map = loadHistory()
   const list = Array.isArray(map[platformId]) ? map[platformId] : []
   const prev = list[0]?.status
-  const nextList = prev === status ? list : [{ tsMs, status }, ...list]
+  const tsMs = payload.tsMs || Date.now()
+  const next: GbStatusEvent = {
+    tsMs,
+    status,
+    action: payload.action,
+    reason: payload.reason,
+    latencyMs: payload.latencyMs,
+    operator: payload.operator || 'admin',
+    requestId: payload.requestId || `gb_evt_${Math.floor(Math.random() * 1e6)}`,
+  }
+  const nextList = prev === status && !payload.action ? list : [next, ...list]
   map[platformId] = nextList.slice(0, 50)
   saveHistory(map)
 }
@@ -68,7 +107,16 @@ function ensureHistorySeed(platforms: GbCascadePlatform[]) {
   for (const p of platforms) {
     const list = Array.isArray(map[p.id]) ? map[p.id] : []
     if (!list.length) {
-      map[p.id] = [{ tsMs: p.createdAtMs || Date.now(), status: p.status }]
+      map[p.id] = [
+        {
+          tsMs: p.createdAtMs || Date.now(),
+          status: p.status,
+          action: '状态校验',
+          reason: '平台初始化状态',
+          operator: 'system',
+          requestId: `gb_seed_${Math.floor(Math.random() * 1e6)}`,
+        },
+      ]
       changed = true
     }
   }
@@ -336,7 +384,12 @@ async function register(p: GbCascadePlatform) {
     )
     fullData.value = list
     savePlatforms(list)
-    pushStatusEvent(p.id, '在线', now)
+    pushStatusEvent(p.id, '在线', {
+      tsMs: now,
+      action: '注册',
+      reason: '平台鉴权成功并保持在线',
+      latencyMs: 400,
+    })
     writeOp('登录', `向上级平台注册：${p.name}`, { platformId: p.id })
     refresh()
     ElMessage.success('注册成功（演示）')
@@ -362,7 +415,12 @@ async function unregister(p: GbCascadePlatform) {
     )
     fullData.value = list
     savePlatforms(list)
-    pushStatusEvent(p.id, '离线', now)
+    pushStatusEvent(p.id, '离线', {
+      tsMs: now,
+      action: '注销',
+      reason: '人工触发注销',
+      latencyMs: 260,
+    })
     writeOp('登出', `向上级平台注销：${p.name}`, { platformId: p.id })
     refresh()
     ElMessage.success('已注销（演示）')
@@ -376,6 +434,8 @@ const selectedPlatform = ref<GbCascadePlatform | null>(null)
 const channels = ref<LocalGbChannel[]>([])
 const drawerTab = ref<'list' | 'share'>('list')
 const syncingAll = ref(false)
+const previewOpen = ref(false)
+const previewChannel = ref<LocalGbChannel | null>(null)
 
 async function syncChannels(p: GbCascadePlatform) {
   if (!p.registered) {
@@ -390,6 +450,11 @@ async function syncChannels(p: GbCascadePlatform) {
     selectedPlatform.value = p
     drawerTab.value = 'list'
     channelsDrawerOpen.value = true
+    pushStatusEvent(p.id, p.status, {
+      action: '通道同步',
+      reason: `刷新通道池，共 ${localChannels.value.length} 条通道`,
+      latencyMs: 420,
+    })
     writeOp('同步', `刷新本机通道池：${p.name}`, { platformId: p.id, count: localChannels.value.length })
     refresh()
     ElMessage.success('通道池已刷新（演示）')
@@ -412,9 +477,24 @@ async function openShare(p: GbCascadePlatform) {
     selectedPlatform.value = p
     drawerTab.value = 'share'
     channelsDrawerOpen.value = true
+    pushStatusEvent(p.id, p.status, {
+      action: '通道共享',
+      reason: '打开通道共享面板',
+      latencyMs: 260,
+    })
   } finally {
     loading.value = false
   }
+}
+
+function openRemotePreview(channel: LocalGbChannel) {
+  if (!selectedPlatform.value) return
+  previewChannel.value = channel
+  previewOpen.value = true
+  pushStatusEvent(selectedPlatform.value.id, selectedPlatform.value.status, {
+    action: '状态校验',
+    reason: `发起远程调阅：${channel.name}`,
+  })
 }
 
 async function syncAll() {
@@ -442,6 +522,11 @@ async function syncAll() {
     localChannels.value = refreshLocalGbChannels()
     const totalCount = localChannels.value.length
     for (const p of candidates) {
+      pushStatusEvent(p.id, p.status, {
+        action: '通道同步',
+        reason: `批量刷新通道池，共 ${totalCount} 条通道`,
+        latencyMs: 520,
+      })
       writeOp('同步', `刷新本机通道池：${p.name}`, { platformId: p.id, count: totalCount, batch: true })
     }
     refresh()
@@ -576,7 +661,9 @@ watch([page, pageSize], () => refresh())
       :channels="channels"
       :initial-tab="drawerTab"
       :total-count="localChannels.length"
+      @preview="openRemotePreview"
     />
     <GbStatusTimelineDialog v-model="statusOpen" :platform="statusPlatform" :events="statusEvents" />
+    <GbRemotePreviewDialog v-model="previewOpen" :platform="selectedPlatform" :channel="previewChannel" />
   </div>
 </template>

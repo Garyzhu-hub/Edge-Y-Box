@@ -9,6 +9,7 @@ export type AlarmRecord = {
   id: string
   cameraLabel: string
   alarmType: string
+  algorithmVersion?: string
   level: '一般' | '警告' | '严重' | '紧急'
   status: '异常' | '恢复'
   alarmTimeMs: number
@@ -54,6 +55,7 @@ function goWorkOrder(id: string) {
       v-if="record"
       :camera-label="record.cameraLabel"
       :alarm-type="record.alarmType"
+      :algorithm-version="record.algorithmVersion || ''"
       :level="record.level"
       :status="record.status"
       :alarm-time-ms="record.alarmTimeMs"

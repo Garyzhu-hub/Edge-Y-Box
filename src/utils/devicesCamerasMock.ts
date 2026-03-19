@@ -61,6 +61,19 @@ function mulberry32(seed: number) {
   }
 }
 
+function makeGbId(seed: string, prefix = '3402000000132') {
+  const p = prefix.replace(/\D/g, '').slice(0, 19) || '3402000000132'
+  let h = 2166136261
+  for (let i = 0; i < seed.length; i++) {
+    h ^= seed.charCodeAt(i)
+    h = Math.imul(h, 16777619)
+  }
+  const suffixLen = Math.max(1, 20 - p.length)
+  const mod = Math.pow(10, suffixLen)
+  const suffix = String((h >>> 0) % mod).padStart(suffixLen, '0')
+  return `${p}${suffix}`.slice(0, 20)
+}
+
 export function makeMockCameras(groups: { id: string; label: string }[], seed = 20260311) {
   const rand = mulberry32(seed)
   const protocols: CameraProtocol[] = ['RTSP', 'GB28181', 'HTTP', 'ONVIF']
@@ -92,6 +105,7 @@ export function makeMockCameras(groups: { id: string; label: string }[], seed = 
       port,
       protocol,
       streamUrl,
+      gbDeviceId: protocol === 'GB28181' ? makeGbId(`CAM-${10000 + i}`) : '',
       username: 'admin',
       password: '******',
       enabled,

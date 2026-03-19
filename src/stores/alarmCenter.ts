@@ -4,6 +4,7 @@ import type { AlarmRecord } from '@/components/alarms/AlarmDetailDialog.vue'
 import { appendAlarmRecord } from '@/utils/alarmRecordsStore'
 import { loadAlarmSettings, type AlarmChannelPolicy } from '@/utils/alarmSettingsStore'
 import { playAlarmSound } from '@/utils/alarmSound'
+import { enqueueAlarmNotifications } from '@/utils/alarmPushCenter'
 
 export type AlarmCenterEvent = {
   record: AlarmRecord
@@ -34,6 +35,7 @@ export const useAlarmCenterStore = defineStore('alarmCenter', () => {
   function push(evt: AlarmCenterEvent) {
     lastPushedAtMs.value = Date.now()
     appendAlarmRecord(evt.record)
+    enqueueAlarmNotifications(evt.record)
     queue.value.push(evt)
     if (!active.value) {
       active.value = queue.value.shift() || null

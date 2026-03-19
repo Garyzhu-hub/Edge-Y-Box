@@ -1,8 +1,10 @@
 <script setup lang="ts">
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { computed, reactive, ref } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 import { appendManualLog } from '@/utils/logsMock'
+import { clearAlarmPushJobs, loadAlarmPushJobs, retryAlarmPushJob, type AlarmPushJob } from '@/utils/alarmPushCenter'
+import { formatDateTime } from '@/stores/app'
 
 type AlarmLevel = '一般' | '警告' | '严重' | '紧急'
 
@@ -145,6 +147,71 @@ function savePersisted() {
 }
 
 const saving = ref(false)
+
+const pushLoading = ref(false)
+const pushJobs = ref<AlarmPushJob[]>([])
+const pushDetailOpen = ref(false)
+const pushDetail = ref<AlarmPushJob | null>(null)
+
+async function refreshPushJobs() {
+  pushLoading.value = true
+  try {
+    await new Promise((r) => setTimeout(r, 120))
+    pushJobs.value = loadAlarmPushJobs().slice(0, 50)
+  } finally {
+    pushLoading.value = false
+  }
+}
+
+function openPushDetail(job: AlarmPushJob) {
+  pushDetail.value = job
+  pushDetailOpen.value = true
+}
+
+function channelLabel(ch: AlarmPushJob['channel']) {
+  if (ch === 'cloudPush') return '云端推送'
+  if (ch === 'sms') return '短信'
+  return '电话'
+}
+
+function statusTagType(s: AlarmPushJob['status']) {
+  if (s === '成功') return 'success'
+  if (s === '失败') return 'danger'
+  if (s === '发送中') return 'warning'
+  return 'info'
+}
+
+async function onRetry(job: AlarmPushJob) {
+  pushLoading.value = true
+  try {
+    await new Promise((r) => setTimeout(r, 120))
+    const r = retryAlarmPushJob(job.id)
+    if (!r.ok) {
+      ElMessage.error(r.message)
+      return
+    }
+    ElMessage.success(`已重试：${r.status}`)
+    refreshPushJobs()
+  } finally {
+    pushLoading.value = false
+  }
+}
+
+async function onClearPushJobs() {
+  const confirmed = await ElMessageBox.confirm('确认清空推送任务记录？（演示）', '清空确认', {
+    type: 'warning',
+    confirmButtonText: '清空',
+    cancelButtonText: '取消',
+  })
+    .then(() => true)
+    .catch(() => false)
+  if (!confirmed) return
+  clearAlarmPushJobs()
+  ElMessage.success('已清空推送任务（演示）')
+  refreshPushJobs()
+}
+
+refreshPushJobs()
 
 const levelRows = computed(() => {
   const rows: { level: AlarmLevel; tips: string }[] = [
@@ -358,5 +425,164 @@ async function onSave() {
         </div>
       </el-card>
     </div>
+
+    <el-card>
+      <div class="flex items-center justify-between">
+        <div>
+          <div class="text-sm font-semibold">推送任务（演示）</div>
+          <div class="mt-1 text-xs text-zinc-500">展示云端推送/短信/电话推送的任务结果，可重试失败记录。</div>
+        </div>
+        <div class="flex items-center gap-2">
+          <el-button :loading="pushLoading" @click="refreshPushJobs">刷新</el-button>
+          <el-button :disabled="!pushJobs.length" :loading="pushLoading" @click="onClearPushJobs">清空</el-button>
+        </div>
+      </div>
+
+      <div class="mt-3">
+        <el-table :data="pushJobs" size="small" height="360" class="table-standard" v-loading="pushLoading">
+          <el-table-column label="时间" width="170">
+            <template #default="scope">
+              <span class="text-xs text-zinc-600">{{ formatDateTime(scope.row.createdAtMs) }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="通道" width="110">
+            <template #default="scope">
+              <span class="text-xs">{{ channelLabel(scope.row.channel) }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="状态" width="90">
+            <template #default="scope">
+              <el-tag :type="statusTagType(scope.row.status)" size="small">{{ scope.row.status }}</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="重试" width="70">
+            <template #default="scope">
+              <el-button link type="primary" size="small" :disabled="scope.row.status !== '失败'" @click="onRetry(scope.row)">
+                重试
+              </el-button>
+            </template>
+          </el-table-column>
+          <el-table-column label="告警" min-width="210">
+            <template #default="scope">
+              <div class="truncate text-xs" :title="scope.row.alarmType">{{ scope.row.alarmType }}</div>
+              <div class="font-mono text-xs text-zinc-500">{{ scope.row.detectionId }}</div>
+            </template>
+          </el-table-column>
+          <el-table-column label="目标" min-width="180">
+            <template #default="scope">
+              <span class="font-mono text-xs">{{ (scope.row.targets || []).join(', ') || '—' }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column prop="message" label="结果" min-width="160" />
+          <el-table-column label="操作" width="90" fixed="right">
+            <template #default="scope">
+              <el-button link type="primary" size="small" @click="openPushDetail(scope.row)">详情</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+      </div>
+
+      <div class="mt-2 text-xs text-zinc-500">
+        提示：推送链路为演示，真实接入应由后端/网关负责发送、回执、重试与签名校验。
+      </div>
+    </el-card>
+
+    <el-drawer v-model="pushDetailOpen" title="推送任务详情" size="520px">
+      <div v-if="pushDetail" class="space-y-3 text-sm">
+        <div class="rounded-xl border border-zinc-200 bg-zinc-50 p-3">
+          <div class="text-xs text-zinc-500">基本信息</div>
+          <div class="mt-1 space-y-1">
+            <div>
+              <span class="text-xs text-zinc-500">任务ID：</span>
+              <span class="font-mono text-xs">{{ pushDetail.id }}</span>
+            </div>
+            <div>
+              <span class="text-xs text-zinc-500">创建时间：</span>
+              <span class="text-xs text-zinc-700">{{ formatDateTime(pushDetail.createdAtMs) }}</span>
+            </div>
+            <div>
+              <span class="text-xs text-zinc-500">通道：</span>
+              <span class="text-xs text-zinc-700">{{ channelLabel(pushDetail.channel) }}</span>
+            </div>
+            <div>
+              <span class="text-xs text-zinc-500">状态：</span>
+              <el-tag :type="statusTagType(pushDetail.status)" size="small">{{ pushDetail.status }}</el-tag>
+            </div>
+            <div>
+              <span class="text-xs text-zinc-500">重试次数：</span>
+              <span class="text-xs text-zinc-700">{{ pushDetail.attempt }}</span>
+            </div>
+            <div>
+              <span class="text-xs text-zinc-500">最后尝试时间：</span>
+              <span class="text-xs text-zinc-700">
+                {{ pushDetail.lastAttemptAtMs ? formatDateTime(pushDetail.lastAttemptAtMs) : '—' }}
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <div class="rounded-xl border border-zinc-200 bg-zinc-50 p-3">
+          <div class="text-xs text-zinc-500">告警信息</div>
+          <div class="mt-1 space-y-1">
+            <div>
+              <span class="text-xs text-zinc-500">检测ID：</span>
+              <span class="font-mono text-xs">{{ pushDetail.detectionId }}</span>
+            </div>
+            <div>
+              <span class="text-xs text-zinc-500">告警ID：</span>
+              <span class="font-mono text-xs">{{ pushDetail.alarmId }}</span>
+            </div>
+            <div>
+              <span class="text-xs text-zinc-500">工单号：</span>
+              <span class="font-mono text-xs">{{ pushDetail.workOrderId || '—' }}</span>
+            </div>
+            <div>
+              <span class="text-xs text-zinc-500">告警类型：</span>
+              <span class="text-xs text-zinc-700">{{ pushDetail.alarmType }}</span>
+            </div>
+            <div>
+              <span class="text-xs text-zinc-500">告警等级：</span>
+              <span class="text-xs text-zinc-700">{{ pushDetail.level }}</span>
+            </div>
+            <div>
+              <span class="text-xs text-zinc-500">摄像头：</span>
+              <span class="text-xs text-zinc-700">{{ pushDetail.cameraLabel }}</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="rounded-xl border border-zinc-200 bg-zinc-50 p-3">
+          <div class="text-xs text-zinc-500">目标与结果</div>
+          <div class="mt-1 space-y-1">
+            <div>
+              <span class="text-xs text-zinc-500">目标：</span>
+              <span class="font-mono text-xs">{{ pushDetail.targets.join(', ') || '—' }}</span>
+            </div>
+            <div>
+              <span class="text-xs text-zinc-500">结果：</span>
+              <span class="text-xs text-zinc-700">{{ pushDetail.message }}</span>
+            </div>
+          </div>
+        </div>
+
+        <div
+          v-if="pushDetail.sourceUrl || pushDetail.analyzedUrl"
+          class="rounded-xl border border-zinc-200 bg-zinc-50 p-3 text-xs text-zinc-500"
+        >
+          <div>图片链接（仅云端推送且开启图片推送时保存）：</div>
+          <div class="mt-1 space-y-1">
+            <div v-if="pushDetail.sourceUrl">
+              <span class="text-zinc-500">原始图：</span>
+              <span class="font-mono break-all">{{ pushDetail.sourceUrl }}</span>
+            </div>
+            <div v-if="pushDetail.analyzedUrl">
+              <span class="text-zinc-500">分析图：</span>
+              <span class="font-mono break-all">{{ pushDetail.analyzedUrl }}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div v-else class="text-xs text-zinc-500">暂无任务详情</div>
+    </el-drawer>
   </div>
 </template>

@@ -1,6 +1,7 @@
 import type { AlarmRecord } from '@/components/alarms/AlarmDetailDialog.vue'
 
 const STORAGE_KEY = 'edge_alarm_records_v1'
+const DELETED_KEY = 'edge_alarm_record_deleted_ids_v1'
 
 export function loadAlarmRecords(): AlarmRecord[] {
   try {
@@ -44,4 +45,39 @@ export function patchAlarmRecordByDetectionId(params: {
   })
   if (changed) saveAlarmRecords(next)
   return changed
+}
+
+export function loadDeletedAlarmRecordIds() {
+  try {
+    const raw = window.localStorage.getItem(DELETED_KEY)
+    if (!raw) return []
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter((x) => typeof x === 'string')
+  } catch {
+    return []
+  }
+}
+
+function saveDeletedAlarmRecordIds(ids: string[]) {
+  try {
+    window.localStorage.setItem(DELETED_KEY, JSON.stringify(ids))
+  } catch {
+    return
+  }
+}
+
+export function removeAlarmRecordsByIds(ids: string[]) {
+  if (!Array.isArray(ids) || !ids.length) return 0
+  const idSet = new Set(ids.filter(Boolean))
+  if (!idSet.size) return 0
+  const current = loadAlarmRecords()
+  const next = current.filter((x) => !idSet.has(x.id) && !idSet.has(x.detectionId))
+  if (next.length !== current.length) saveAlarmRecords(next)
+
+  const deleted = new Set(loadDeletedAlarmRecordIds())
+  for (const id of idSet) deleted.add(id)
+  saveDeletedAlarmRecordIds(Array.from(deleted).slice(-2000))
+
+  return idSet.size
 }

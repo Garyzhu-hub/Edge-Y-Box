@@ -10,18 +10,23 @@ export type DownloadServer = {
 
 export type DownloadRecord = {
   id: string
+  taskId: string
   tsMs: number
   serverName: string
   url: string
+  name: string
+  modelFormat: string
   progress: number
-  status: '成功' | '失败'
+  status: '下载中' | '成功' | '失败'
   message: string
+  retryCount: number
 }
 
 const props = defineProps<{ modelValue: boolean; history: DownloadRecord[] }>()
 const emit = defineEmits<{
   (e: 'update:modelValue', v: boolean): void
   (e: 'download', payload: { server: DownloadServer; url: string; name: string; modelFormat: string }): void
+  (e: 'retry', recordId: string): void
   (e: 'clear-history'): void
 }>()
 
@@ -75,6 +80,10 @@ function onDownload() {
 function onClearHistory() {
   emit('clear-history')
   ElMessage.success('已清空下载记录（演示）')
+}
+
+function onRetry(record: DownloadRecord) {
+  emit('retry', record.id)
 }
 </script>
 
@@ -134,14 +143,33 @@ function onClearHistory() {
               </template>
             </el-table-column>
             <el-table-column prop="serverName" label="服务器" min-width="120" />
+            <el-table-column label="算法包" min-width="170">
+              <template #default="scope">
+                <div class="truncate text-xs" :title="scope.row.name">{{ scope.row.name }}</div>
+              </template>
+            </el-table-column>
             <el-table-column label="状态" width="90">
               <template #default="scope">
-                <el-tag :type="scope.row.status === '成功' ? 'success' : 'danger'" size="small">{{ scope.row.status }}</el-tag>
+                <el-tag :type="scope.row.status === '成功' ? 'success' : scope.row.status === '失败' ? 'danger' : 'warning'" size="small">
+                  {{ scope.row.status }}
+                </el-tag>
               </template>
             </el-table-column>
             <el-table-column label="进度" width="100">
               <template #default="scope">
                 <span class="text-xs">{{ scope.row.progress }}%</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="结果" min-width="150">
+              <template #default="scope">
+                <div class="text-xs text-zinc-600">{{ scope.row.message }}</div>
+              </template>
+            </el-table-column>
+            <el-table-column label="重试" width="80" fixed="right">
+              <template #default="scope">
+                <el-button link type="primary" size="small" :disabled="scope.row.status === '下载中'" @click="onRetry(scope.row)">
+                  重试
+                </el-button>
               </template>
             </el-table-column>
           </el-table>

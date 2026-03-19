@@ -13,6 +13,8 @@ export type Algorithm = {
   description?: string
   remark?: string
   status: AlgorithmStatus
+  versionHistory?: AlgorithmVersion[]
+  rollbackHistory?: AlgorithmRollbackRecord[]
   updatedAtMs: number
   lastSyncAtMs: number
 }
@@ -22,6 +24,15 @@ export type AlgorithmVersion = {
   releasedAtMs: number
   notes: string
   isCurrent: boolean
+}
+
+export type AlgorithmRollbackRecord = {
+  id: string
+  tsMs: number
+  fromVersion: string
+  toVersion: string
+  reason: string
+  operator: string
 }
 
 function mulberry32(seed: number) {
@@ -63,6 +74,7 @@ export function makeMockAlgorithms(seed = 20260311) {
     const status: AlgorithmStatus = rand() > 0.22 ? '已启用' : '已停用'
     const updatedAtMs = Date.now() - Math.floor(rand() * 14 * 24 * 60 * 60 * 1000)
     const lastSyncAtMs = updatedAtMs + Math.floor(rand() * 6 * 60 * 60 * 1000)
+    const versionHistory = makeMockVersions(`ALG-${String(10001 + i).padStart(5, '0')}`, currentVersion)
     return {
       id: `ALG-${String(10001 + i).padStart(5, '0')}`,
       name,
@@ -71,6 +83,8 @@ export function makeMockAlgorithms(seed = 20260311) {
       vendor,
       currentVersion,
       status,
+      versionHistory,
+      rollbackHistory: [],
       updatedAtMs,
       lastSyncAtMs,
     }

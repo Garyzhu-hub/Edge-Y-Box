@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { formatDateTime } from '@/stores/app'
+import { appendManualLog } from '@/utils/logsMock'
 import AlgorithmFormDialog from '@/components/algorithms/AlgorithmFormDialog.vue'
 import VersionManagerDialog from '@/components/algorithms/VersionManagerDialog.vue'
 import AlgorithmDownloadDialog, { type DownloadRecord } from '@/components/algorithms/AlgorithmDownloadDialog.vue'
@@ -9,6 +10,7 @@ import {
   makeMockAlgorithms,
   makeMockVersions,
   type Algorithm,
+  type AlgorithmRollbackRecord,
   type AlgorithmStatus,
   type AlgorithmVersion,
 } from '@/utils/algorithmsMock'
@@ -32,7 +34,7 @@ function loadAlgorithms() {
     const raw = window.localStorage.getItem(STORAGE_KEY)
     if (raw) {
       const parsed = JSON.parse(raw)
-      if (Array.isArray(parsed)) return parsed as Algorithm[]
+      if (Array.isArray(parsed)) return parsed.map((a) => normalizeAlgorithm(a))
     }
   } catch {
     return makeMockAlgorithms()
@@ -45,6 +47,65 @@ function saveAlgorithms(list: Algorithm[]) {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(list))
   } catch {
     return
+  }
+}
+
+function normalizeVersion(v: any): AlgorithmVersion | null {
+  if (!v || typeof v !== 'object') return null
+  const version = String(v.version || '').trim()
+  const releasedAtMs = Number(v.releasedAtMs)
+  if (!version || !Number.isFinite(releasedAtMs)) return null
+  return {
+    version,
+    releasedAtMs,
+    notes: String(v.notes || '历史版本'),
+    isCurrent: Boolean(v.isCurrent),
+  }
+}
+
+function normalizeRollback(r: any): AlgorithmRollbackRecord | null {
+  if (!r || typeof r !== 'object') return null
+  const tsMs = Number(r.tsMs)
+  const fromVersion = String(r.fromVersion || '').trim()
+  const toVersion = String(r.toVersion || '').trim()
+  if (!Number.isFinite(tsMs) || !fromVersion || !toVersion) return null
+  return {
+    id: String(r.id || `rb_${tsMs}_${Math.floor(Math.random() * 1e5)}`),
+    tsMs,
+    fromVersion,
+    toVersion,
+    reason: String(r.reason || '手动回滚'),
+    operator: String(r.operator || 'admin'),
+  }
+}
+
+function normalizeAlgorithm(a: any): Algorithm {
+  const base = a as Algorithm
+  const currentVersion = String(base.currentVersion || 'v1.0.0')
+  let versionHistory = Array.isArray(base.versionHistory) ? base.versionHistory.map((x) => normalizeVersion(x)).filter(Boolean) as AlgorithmVersion[] : []
+  if (!versionHistory.length) versionHistory = makeMockVersions(base.id || 'ALG-00000', currentVersion)
+  if (!versionHistory.some((v) => v.version === currentVersion)) {
+    versionHistory = [
+      { version: currentVersion, releasedAtMs: Date.now(), notes: '当前版本补录', isCurrent: true },
+      ...versionHistory.map((v) => ({ ...v, isCurrent: false })),
+    ]
+  } else {
+    versionHistory = versionHistory.map((v) => ({ ...v, isCurrent: v.version === currentVersion }))
+  }
+  versionHistory = versionHistory
+    .slice()
+    .sort((x, y) => y.releasedAtMs - x.releasedAtMs)
+    .slice(0, 30)
+
+  const rollbackHistory = Array.isArray(base.rollbackHistory)
+    ? (base.rollbackHistory.map((x) => normalizeRollback(x)).filter(Boolean) as AlgorithmRollbackRecord[]).slice(0, 30)
+    : []
+
+  return {
+    ...base,
+    currentVersion,
+    versionHistory,
+    rollbackHistory,
   }
 }
 
@@ -155,6 +216,11 @@ function openEdit(a: Algorithm) {
   formOpen.value = true
 }
 
+function openVersionsFromForm(a: Algorithm) {
+  formOpen.value = false
+  openVersions(a)
+}
+
 function upsertAlgorithm(a: Algorithm) {
   const idx = fullData.value.findIndex((x) => x.id === a.id)
   if (idx >= 0) fullData.value[idx] = a
@@ -166,22 +232,128 @@ function upsertAlgorithm(a: Algorithm) {
 const versionOpen = ref(false)
 const selected = ref<Algorithm | null>(null)
 const versions = ref<AlgorithmVersion[]>([])
+const rollbackRecords = ref<AlgorithmRollbackRecord[]>([])
 
 function openVersions(a: Algorithm) {
   selected.value = a
-  versions.value = makeMockVersions(a.id, a.currentVersion)
+  versions.value = (a.versionHistory || makeMockVersions(a.id, a.currentVersion))
+    .slice()
+    .sort((x, y) => y.releasedAtMs - x.releasedAtMs)
+  rollbackRecords.value = (a.rollbackHistory || []).slice().sort((x, y) => y.tsMs - x.tsMs)
   versionOpen.value = true
 }
 
-function rollback(payload: { version: string }) {
+function uploadVersion(payload: { version: string; notes: string; setAsCurrent: boolean; fileName: string; modelFormat: string }) {
   if (!selected.value) return
   const id = selected.value.id
   const idx = fullData.value.findIndex((x) => x.id === id)
   if (idx < 0) return
-  fullData.value[idx] = { ...fullData.value[idx], currentVersion: payload.version, updatedAtMs: Date.now() }
+  const now = Date.now()
+  const base = fullData.value[idx]
+  const history = (base.versionHistory || makeMockVersions(id, base.currentVersion)).slice()
+  if (history.some((v) => v.version === payload.version)) {
+    ElMessage.error('该版本号已存在')
+    return
+  }
+  const nextHistory = [
+    {
+      version: payload.version,
+      releasedAtMs: now,
+      notes: payload.notes || '上传新版本',
+      isCurrent: Boolean(payload.setAsCurrent),
+    },
+    ...history.map((v) => ({ ...v, isCurrent: payload.setAsCurrent ? false : v.isCurrent })),
+  ]
+    .slice()
+    .sort((a, b) => b.releasedAtMs - a.releasedAtMs)
+    .slice(0, 30)
+  const currentVersion = payload.setAsCurrent ? payload.version : base.currentVersion
+  const normalizedHistory = nextHistory.map((v) => ({ ...v, isCurrent: v.version === currentVersion }))
+
+  fullData.value[idx] = {
+    ...base,
+    currentVersion,
+    modelFormat: payload.modelFormat || base.modelFormat,
+    packageName: payload.fileName || base.packageName,
+    packageSource: 'local_upload',
+    versionHistory: normalizedHistory,
+    updatedAtMs: now,
+    lastSyncAtMs: now,
+  }
   saveAlgorithms(fullData.value)
   selected.value = fullData.value[idx]
-  versions.value = makeMockVersions(id, payload.version)
+  versions.value = (fullData.value[idx].versionHistory || []).slice().sort((x, y) => y.releasedAtMs - x.releasedAtMs)
+
+  appendManualLog({
+    kind: 'operation',
+    tsMs: now,
+    level: 'info',
+    module: '算法管理',
+    action: '上传版本',
+    summary: `上传新版本：${fullData.value[idx].name}`,
+    operator: 'admin',
+    ip: '127.0.0.1',
+    requestId: `algo_upload_${Math.floor(Math.random() * 1e6)}`,
+    detail: {
+      algorithmId: id,
+      version: payload.version,
+      setAsCurrent: payload.setAsCurrent,
+      fileName: payload.fileName,
+      modelFormat: payload.modelFormat,
+      notes: payload.notes,
+    },
+  })
+  ElMessage.success(`已上传版本 ${payload.version}（演示）`)
+  refresh()
+}
+
+function rollback(payload: { version: string; reason: string }) {
+  if (!selected.value) return
+  const id = selected.value.id
+  const idx = fullData.value.findIndex((x) => x.id === id)
+  if (idx < 0) return
+  const now = Date.now()
+  const prevVersion = fullData.value[idx].currentVersion
+  const nextHistory = (fullData.value[idx].versionHistory || makeMockVersions(id, prevVersion)).map((v) => ({
+    ...v,
+    isCurrent: v.version === payload.version,
+  }))
+  const rollbackRecord: AlgorithmRollbackRecord = {
+    id: `rb_${now}_${Math.floor(Math.random() * 1e5)}`,
+    tsMs: now,
+    fromVersion: prevVersion,
+    toVersion: payload.version,
+    reason: payload.reason,
+    operator: 'admin',
+  }
+  fullData.value[idx] = {
+    ...fullData.value[idx],
+    currentVersion: payload.version,
+    versionHistory: nextHistory,
+    rollbackHistory: [rollbackRecord, ...(fullData.value[idx].rollbackHistory || [])].slice(0, 30),
+    updatedAtMs: now,
+  }
+  saveAlgorithms(fullData.value)
+  selected.value = fullData.value[idx]
+  versions.value = (fullData.value[idx].versionHistory || []).slice().sort((x, y) => y.releasedAtMs - x.releasedAtMs)
+  rollbackRecords.value = (fullData.value[idx].rollbackHistory || []).slice().sort((x, y) => y.tsMs - x.tsMs)
+  appendManualLog({
+    kind: 'operation',
+    tsMs: now,
+    level: 'info',
+    module: '算法管理',
+    action: '回滚',
+    summary: `算法回滚：${fullData.value[idx].name}`,
+    operator: 'admin',
+    ip: '127.0.0.1',
+    requestId: `algo_rb_${Math.floor(Math.random() * 1e6)}`,
+    detail: {
+      algorithmId: id,
+      fromVersion: prevVersion,
+      toVersion: payload.version,
+      reason: payload.reason,
+    },
+  })
   refresh()
 }
 
@@ -216,6 +388,7 @@ async function removeAlgorithm(a: Algorithm) {
 
 const downloadOpen = ref(false)
 const downloadHistory = ref<DownloadRecord[]>(loadDownloadHistory())
+const downloadTimers = new Map<string, number>()
 
 function openDownload() {
   downloadHistory.value = loadDownloadHistory()
@@ -223,6 +396,8 @@ function openDownload() {
 }
 
 function clearDownloadHistory() {
+  for (const t of downloadTimers.values()) window.clearInterval(t)
+  downloadTimers.clear()
   downloadHistory.value = []
   saveDownloadHistory([])
 }
@@ -232,60 +407,141 @@ function makeAlgId() {
   return `ALG-${String(n).padStart(5, '0')}`
 }
 
-async function onDownload(payload: { server: { name: string }; url: string; name: string; modelFormat: string }) {
-  const now = Date.now()
-  const record: DownloadRecord = {
-    id: `dl_${now}_${Math.floor(Math.random() * 1e5)}`,
-    tsMs: now,
-    serverName: payload.server.name,
-    url: payload.url,
-    progress: 0,
-    status: '失败',
-    message: '初始化',
+function hashText(text: string) {
+  let h = 2166136261
+  for (let i = 0; i < text.length; i++) {
+    h ^= text.charCodeAt(i)
+    h = Math.imul(h, 16777619)
   }
-  downloadHistory.value = [record, ...downloadHistory.value].slice(0, 20)
-  saveDownloadHistory(downloadHistory.value)
+  return h >>> 0
+}
 
-  await new Promise((r) => setTimeout(r, 220))
-  record.progress = 35
-  record.message = '下载中'
+function persistHistory() {
   saveDownloadHistory(downloadHistory.value)
+}
 
-  await new Promise((r) => setTimeout(r, 300))
-  record.progress = 78
-  record.message = '解压与校验'
-  saveDownloadHistory(downloadHistory.value)
+function upsertHistory(record: DownloadRecord) {
+  const idx = downloadHistory.value.findIndex((x) => x.id === record.id)
+  if (idx >= 0) downloadHistory.value[idx] = { ...record }
+  else downloadHistory.value = [record, ...downloadHistory.value].slice(0, 20)
+  persistHistory()
+}
 
-  await new Promise((r) => setTimeout(r, 240))
-  const ok = Math.random() > 0.15
+function finishDownload(record: DownloadRecord, ok: boolean, failReason: string) {
+  if (downloadTimers.has(record.id)) {
+    window.clearInterval(downloadTimers.get(record.id))
+    downloadTimers.delete(record.id)
+  }
   record.progress = 100
   record.status = ok ? '成功' : '失败'
-  record.message = ok ? '下载完成' : '网络异常'
-  saveDownloadHistory(downloadHistory.value)
+  record.message = ok ? '下载完成' : failReason
+  upsertHistory(record)
 
   if (!ok) {
     ElMessage.error('下载失败（演示）')
     return
   }
 
+  const algId = makeAlgId()
   const newAlg: Algorithm = {
-    id: makeAlgId(),
-    name: payload.name,
+    id: algId,
+    name: record.name,
     category: '安防',
     scene: '公共区域',
     vendor: 'ThirdParty',
     currentVersion: 'v1.0.0',
-    modelFormat: payload.modelFormat,
-    packageName: payload.name,
+    modelFormat: record.modelFormat,
+    packageName: record.name,
     packageSource: 'remote_download',
     status: '已停用',
+    versionHistory: makeMockVersions(algId, 'v1.0.0'),
+    rollbackHistory: [],
     updatedAtMs: Date.now(),
     lastSyncAtMs: Date.now(),
   }
   fullData.value.unshift(newAlg)
   saveAlgorithms(fullData.value)
-  ElMessage.success('算法已导入（远程下载占位）')
+  ElMessage.success('算法已导入（远程下载演示）')
   refresh()
+}
+
+function startDownloadTask(record: DownloadRecord) {
+  const fingerprint = `${record.url}|${record.modelFormat}|${record.retryCount}`
+  const seed = hashText(fingerprint)
+  const failType = seed % 4
+  const failAt = 55 + (seed % 30)
+  const step = 6 + (seed % 8)
+  const tick = 140 + (seed % 130)
+  const ok = failType !== 0 || record.retryCount >= 1
+
+  record.status = '下载中'
+  record.progress = 0
+  record.message = '创建下载任务'
+  upsertHistory(record)
+
+  const timer = window.setInterval(() => {
+    const next = Math.min(99, record.progress + step)
+    record.progress = next
+    if (next < 35) record.message = '下载中'
+    else if (next < 70) record.message = '校验签名'
+    else record.message = '解压与导入'
+    upsertHistory(record)
+
+    if (!ok && next >= failAt) {
+      const reason = failType === 0 ? '网络异常：连接超时' : '下载失败'
+      finishDownload(record, false, reason)
+      return
+    }
+    if (next >= 99) {
+      finishDownload(record, true, '下载完成')
+    }
+  }, tick)
+
+  downloadTimers.set(record.id, timer)
+}
+
+function onDownload(payload: { server: { name: string }; url: string; name: string; modelFormat: string }) {
+  const now = Date.now()
+  const record: DownloadRecord = {
+    id: `dl_${now}_${Math.floor(Math.random() * 1e5)}`,
+    taskId: `task_${now}_${Math.floor(Math.random() * 1e4)}`,
+    tsMs: now,
+    serverName: payload.server.name,
+    url: payload.url,
+    name: payload.name,
+    modelFormat: payload.modelFormat,
+    progress: 0,
+    status: '下载中',
+    message: '初始化',
+    retryCount: 0,
+  }
+  upsertHistory(record)
+  startDownloadTask(record)
+}
+
+function retryDownload(recordId: string) {
+  const prev = downloadHistory.value.find((x) => x.id === recordId)
+  if (!prev) {
+    ElMessage.warning('未找到下载记录')
+    return
+  }
+  if (prev.status === '下载中') {
+    ElMessage.warning('下载进行中，请稍后')
+    return
+  }
+  const now = Date.now()
+  const retryRecord: DownloadRecord = {
+    ...prev,
+    id: `dl_${now}_${Math.floor(Math.random() * 1e5)}`,
+    taskId: `task_${now}_${Math.floor(Math.random() * 1e4)}`,
+    tsMs: now,
+    progress: 0,
+    status: '下载中',
+    message: '重试中',
+    retryCount: (prev.retryCount || 0) + 1,
+  }
+  upsertHistory(retryRecord)
+  startDownloadTask(retryRecord)
 }
 
 const ieOpen = ref(false)
@@ -301,17 +557,70 @@ function openImport() {
   ieOpen.value = true
 }
 
-function onImport(payload: { algorithms: Algorithm[]; merge: boolean }) {
+function onImport(payload: { algorithms: Algorithm[]; merge: boolean; source: string; conflictStrategy: 'update' | 'appendVersion' }) {
+  const existingIds = new Set(fullData.value.map((x) => x.id))
+  const normalized = (Array.isArray(payload.algorithms) ? payload.algorithms : [])
+    .map((a) => normalizeAlgorithm(a))
+    .filter((a) => a && typeof a.id === 'string' && typeof a.name === 'string')
+
+  if (!normalized.length) {
+    ElMessage.warning('未检测到可导入的算法数据')
+    return
+  }
+
   if (!payload.merge) {
-    fullData.value = payload.algorithms
+    fullData.value = normalized
   } else {
     const map = new Map(fullData.value.map((a) => [a.id, a]))
-    for (const a of payload.algorithms) map.set(a.id, a)
+    for (const a of normalized) {
+      if (!map.has(a.id)) {
+        map.set(a.id, a)
+        continue
+      }
+      const prev = map.get(a.id)!
+      if (payload.conflictStrategy === 'appendVersion') {
+        const now = Date.now()
+        const incomingVersion = String(a.currentVersion || '').trim() || `v${new Date(now).toISOString().slice(0, 10)}`
+        const prevHistory = (prev.versionHistory || makeMockVersions(prev.id, prev.currentVersion)).slice()
+        const already = prevHistory.some((v) => v.version === incomingVersion)
+        const nextHistory = already
+          ? prevHistory
+          : [
+              {
+                version: incomingVersion,
+                releasedAtMs: now,
+                notes: `导入升级（来源：${payload.source}）`,
+                isCurrent: true,
+              },
+              ...prevHistory.map((v) => ({ ...v, isCurrent: false })),
+            ]
+        map.set(a.id, {
+          ...prev,
+          currentVersion: incomingVersion,
+          versionHistory: nextHistory.map((v) => ({ ...v, isCurrent: v.version === incomingVersion })).slice(0, 30),
+          modelFormat: a.modelFormat || prev.modelFormat,
+          packageName: a.packageName || prev.packageName,
+          packageSource: a.packageSource || prev.packageSource,
+          updatedAtMs: now,
+          lastSyncAtMs: now,
+        })
+      } else {
+        map.set(a.id, a)
+      }
+    }
     fullData.value = Array.from(map.values())
   }
+  const updatedCount = normalized.filter((x) => existingIds.has(x.id)).length
+  const createdCount = Math.max(0, normalized.length - updatedCount)
   saveAlgorithms(fullData.value)
   refresh()
+  ElMessage.success(`导入完成：新增${createdCount}，更新${updatedCount}（来源：${payload.source}）`)
 }
+
+onBeforeUnmount(() => {
+  for (const t of downloadTimers.values()) window.clearInterval(t)
+  downloadTimers.clear()
+})
 </script>
 
 <template>
@@ -405,12 +714,20 @@ function onImport(payload: { algorithms: Algorithm[]; merge: boolean }) {
       </div>
     </el-card>
 
-    <AlgorithmFormDialog v-model="formOpen" :initial="editing" @saved="upsertAlgorithm" />
-    <VersionManagerDialog v-model="versionOpen" :algorithm="selected" :versions="versions" @rollback="rollback" />
+    <AlgorithmFormDialog v-model="formOpen" :initial="editing" @saved="upsertAlgorithm" @open-versions="openVersionsFromForm" />
+    <VersionManagerDialog
+      v-model="versionOpen"
+      :algorithm="selected"
+      :versions="versions"
+      :rollback-records="rollbackRecords"
+      @rollback="rollback"
+      @upload-version="uploadVersion"
+    />
     <AlgorithmDownloadDialog
       v-model="downloadOpen"
       :history="downloadHistory"
       @download="onDownload"
+      @retry="retryDownload"
       @clear-history="clearDownloadHistory"
     />
     <AlgorithmImportExportDialog v-model="ieOpen" :mode="ieMode" :algorithms="fullData" @import="onImport" />
