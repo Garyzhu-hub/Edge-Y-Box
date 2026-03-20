@@ -39,6 +39,8 @@ const filter = reactive<FilterModel>({
 })
 
 const loading = ref(false)
+const lastRefreshAtMs = ref(0)
+const lastRefreshError = ref('')
 const page = ref(1)
 const pageSize = ref(10)
 const total = ref(0)
@@ -182,6 +184,7 @@ function applyFilter(data: AlarmRecord[]) {
 
 async function fetchData() {
   loading.value = true
+  lastRefreshError.value = ''
   try {
     await new Promise((r) => setTimeout(r, 300))
 
@@ -198,6 +201,11 @@ async function fetchData() {
     total.value = filtered.length
     const start = (page.value - 1) * pageSize.value
     records.value = filtered.slice(start, start + pageSize.value)
+    lastRefreshAtMs.value = Date.now()
+  } catch (err) {
+    lastRefreshError.value = err instanceof Error ? err.message : '加载失败'
+    records.value = []
+    total.value = 0
   } finally {
     loading.value = false
   }
@@ -394,6 +402,10 @@ function tagType(level: AlarmLevel) {
     </div>
 
     <el-card>
+      <div class="mb-3 rounded-lg border border-zinc-200 bg-zinc-50 p-3 text-xs text-zinc-600">
+        <div>最近刷新：{{ lastRefreshAtMs ? formatDateTime(lastRefreshAtMs) : '尚未刷新' }}</div>
+        <div v-if="lastRefreshError" class="mt-1 text-red-600">刷新失败：{{ lastRefreshError }}</div>
+      </div>
       <div class="grid grid-cols-1 gap-3 md:grid-cols-6">
         <el-input v-model="filter.camera" placeholder="摄像头名称" clearable />
 
@@ -496,6 +508,8 @@ function tagType(level: AlarmLevel) {
         </el-table-column>
       </el-table>
 
+      <el-empty v-if="!loading && records.length === 0" description="当前筛选条件下暂无报警记录" />
+
       <div class="mt-3 flex justify-end">
         <el-pagination
           v-model:current-page="page"
@@ -552,6 +566,8 @@ function tagType(level: AlarmLevel) {
         <div class="mt-2 text-xs text-zinc-500">{{ formatDateTime(r.alarmTimeMs) }}</div>
       </el-card>
     </div>
+
+    <el-empty v-if="viewMode === 'grid' && !loading && records.length === 0" description="当前筛选条件下暂无报警记录" />
 
     <div v-if="viewMode === 'grid'" class="flex justify-end">
       <el-pagination

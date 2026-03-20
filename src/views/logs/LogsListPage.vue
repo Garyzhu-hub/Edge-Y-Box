@@ -161,7 +161,20 @@ function openDetail(r: LogRecord) {
 }
 
 function onExport() {
-  ElMessage.success('导出已提交（占位）')
+  const payload = {
+    kind: props.kind,
+    exportedAtMs: Date.now(),
+    total: total.value,
+    rows,
+  }
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `logs_${props.kind}_${new Date().toISOString().slice(0, 10)}.json`
+  a.click()
+  URL.revokeObjectURL(url)
+  ElMessage.success('日志已导出（演示数据）')
 }
 
 const pageTitle = computed(() => props.title || kindLabel(props.kind))

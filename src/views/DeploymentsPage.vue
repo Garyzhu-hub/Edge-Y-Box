@@ -51,28 +51,68 @@ function normalizeDeployment(d: Deployment): Deployment {
   const timeSlots = Array.isArray((params as any).timeSlots) ? (params as any).timeSlots : defaultDeploymentParams().timeSlots
   const repeat = (params as any).repeat || defaultDeploymentParams().repeat
   const runStatus: DeploymentRunStatus = (d as any).runStatus || (d.status === '已停用' ? '已暂停' : '运行中')
-  const instances = (d.instances || []).map((ins: any) => ({
-    ...ins,
-    params: ins.params ? { ...defaultInstanceParams(), ...ins.params } : defaultInstanceParams(),
-    rois: (ins.rois || []).map((r: any) => {
-      const vertices = Array.isArray(r.vertices) ? r.vertices : undefined
+  // 兼容旧数据：旧实例里可能带 rois[]；新结构是 deployment.rois + instance.roiIds
+  const rois: any[] = Array.isArray((d as any).rois) ? ((d as any).rois as any[]) : []
+  const legacyInstanceRois: any[] = []
+  for (const ins of (d.instances || []) as any[]) legacyInstanceRois.push(...((ins as any).rois || []))
+  const mergedRois = [...rois, ...legacyInstanceRois]
+    .filter((x) => x && typeof x === 'object')
+    .map((r: any, idx: number) => {
+      const vertices = Array.isArray(r.vertices) ? r.vertices : []
       const enabled = typeof r.enabled === 'boolean' ? r.enabled : true
-      const points = vertices ? vertices.length : typeof r.points === 'number' ? r.points : 0
+      const points = vertices.length ? vertices.length : typeof r.points === 'number' ? r.points : 0
       return {
-        ...r,
+        id: String(r.id || `ROI-${String(100 + idx).padStart(3, '0')}`),
+        name: String(r.name || `ROI-${idx + 1}`),
+        type: (r.type === 'rect' ? 'rect' : 'polygon') as 'rect' | 'polygon',
         enabled,
         vertices,
         points,
-        paramsOverride: r.paramsOverride && typeof r.paramsOverride === 'object' ? r.paramsOverride : undefined,
       }
-    }),
-  }))
+    })
+  const uniqRois = Array.from(new Map(mergedRois.map((r) => [r.id, r])).values())
+
+  const instances = (d.instances || []).map((ins: any) => {
+    const roiIds = Array.isArray(ins.roiIds)
+      ? ins.roiIds.map((x: any) => String(x || '')).filter(Boolean)
+      : Array.isArray(ins.rois)
+        ? ins.rois.map((r: any) => String(r?.id || '')).filter(Boolean)
+        : []
+    return {
+      ...ins,
+      roiIds,
+      params: ins.params ? { ...defaultInstanceParams(), ...ins.params } : defaultInstanceParams(),
+      schedule:
+        ins.schedule || { mode: 'fixed_time', repeat: '每天', timePoints: ['09:00'], intervalMin: 5, intervalSlot: { start: '09:00', end: '18:00' } },
+    }
+  })
   return {
     ...d,
     runStatus,
     instances,
+    rois: uniqRois,
     params: { repeat, timeSlots },
   }
+}
+
+function scheduleSummary(s: any) {
+  const mode = s?.mode === 'interval' ? 'interval' : 'fixed_time'
+  const repeat = String(s?.repeat || '每天')
+  if (mode === 'fixed_time') {
+    const pts = Array.isArray(s?.timePoints) ? s.timePoints.map((x: any) => String(x || '').slice(0, 5)).filter(Boolean) : []
+    return `${repeat} ${pts.length ? pts.join('，') : '—'}`
+  }
+  const slot = s?.intervalSlot || { start: '09:00', end: '18:00' }
+  const start = String(slot.start || '').slice(0, 5)
+  const end = String(slot.end || '').slice(0, 5)
+  const intervalMin = Math.min(120, Math.max(1, Number(s?.intervalMin || 5)))
+  return `${repeat} ${start}~${end} 每${intervalMin}分钟`
+}
+
+function rulesSummary(d: Deployment) {
+  const list = (d.instances || []).slice(0, 2).map((ins: any) => `${ins.algorithmName}｜ROI:${(ins.roiIds || []).length}｜${scheduleSummary((ins as any).schedule)}`)
+  const more = (d.instances || []).length > 2 ? ` 等${d.instances.length}条` : ''
+  return list.length ? `${list.join('；')}${more}` : '—'
 }
 
 function savePersisted(list: Deployment[]) {
@@ -167,7 +207,7 @@ function openCreate() {
 function openEdit(d: Deployment) {
   editing.value = {
     ...d,
-    instances: d.instances.map((x) => ({ ...x, rois: x.rois.map((r) => ({ ...r })), params: { ...x.params } })),
+    instances: d.instances.map((x: any) => ({ ...x, roiIds: [...(x.roiIds || [])], params: { ...x.params }, schedule: { ...x.schedule } })),
     params: { ...d.params, timeSlots: (d.params.timeSlots || []).map((s) => ({ ...s })) },
   }
   dialogOpen.value = true
@@ -317,8 +357,11 @@ async function simulateAlarm(d: Deployment) {
   const detectionId = nextDetectionId(new Date(nowMs))
   const usedVersion = effectiveAlgorithmVersion(ins)
 
-  const enabledRois = (ins.rois || []).filter((r) => r.enabled && Array.isArray(r.vertices) && r.vertices.length >= 3)
-  const roi = enabledRois.length ? enabledRois[Math.floor(Math.random() * enabledRois.length)] : null
+  const rois = (d as any).rois || []
+  const enabledRois = rois.filter((r: any) => r.enabled && Array.isArray(r.vertices) && r.vertices.length >= 3)
+  const allowed = enabledRois.filter((r: any) => (ins as any).roiIds?.includes?.(r.id))
+  const pool = allowed.length ? allowed : enabledRois
+  const roi = pool.length ? pool[Math.floor(Math.random() * pool.length)] : null
 
   const record: AlarmRecord = {
     id: detectionId,
@@ -423,13 +466,10 @@ async function simulateRecover(d: Deployment) {
           </template>
         </el-table-column>
         <el-table-column prop="cameraLabel" label="摄像头" min-width="160" />
-        <el-table-column label="布防时间" min-width="180">
+        <el-table-column label="规则摘要" min-width="260">
           <template #default="scope">
             <div class="text-xs text-zinc-600">
-              <div>{{ scope.row.params.repeat }}</div>
-              <div class="mt-1 text-zinc-500">
-                {{ (scope.row.params.timeSlots || []).map((s) => `${s.start}~${s.end}`).join('，') || '—' }}
-              </div>
+              {{ rulesSummary(scope.row) }}
             </div>
           </template>
         </el-table-column>

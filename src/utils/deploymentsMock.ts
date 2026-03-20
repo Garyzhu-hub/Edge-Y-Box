@@ -4,6 +4,8 @@ export type DeploymentRunStatus = '运行中' | '已暂停' | '异常'
 
 export type RepeatCycle = '每天' | '工作日' | '周末' | '自定义'
 export type TimeSlot = { start: string; end: string }
+export type TimePoint = string
+export type InstanceScheduleMode = 'fixed_time' | 'interval'
 
 export type RoiShape = {
   id: string
@@ -12,15 +14,19 @@ export type RoiShape = {
   enabled: boolean
   points: number
   vertices?: { x: number; y: number }[]
-  paramsOverride?: {
-    confidence?: number
-    triggerCount?: number
-  }
 }
 
 export type DeploymentParams = {
   repeat: RepeatCycle
   timeSlots: TimeSlot[]
+}
+
+export type InstanceSchedule = {
+  mode: InstanceScheduleMode
+  repeat: RepeatCycle
+  timePoints: TimePoint[]
+  intervalMin: number
+  intervalSlot: TimeSlot
 }
 
 export type InstanceParams = {
@@ -39,8 +45,9 @@ export type AlgorithmInstance = {
   algorithmName: string
   version: string
   enabled: boolean
-  rois: RoiShape[]
+  roiIds: string[]
   params: InstanceParams
+  schedule: InstanceSchedule
 }
 
 export type Deployment = {
@@ -50,6 +57,7 @@ export type Deployment = {
   cameraLabel: string
   status: DeploymentStatus
   runStatus: DeploymentRunStatus
+  rois: RoiShape[]
   instances: AlgorithmInstance[]
   params: DeploymentParams
   updatedAtMs: number
@@ -71,6 +79,16 @@ export function defaultInstanceParams(): InstanceParams {
     linkSnapshot: true,
     popup: true,
     sound: false,
+  }
+}
+
+export function defaultInstanceSchedule(): InstanceSchedule {
+  return {
+    mode: 'fixed_time',
+    repeat: '每天',
+    timePoints: ['09:00'],
+    intervalMin: 5,
+    intervalSlot: { start: '09:00', end: '18:00' },
   }
 }
 
@@ -136,7 +154,6 @@ export function makeMockDeployments(seed = 20260311) {
         enabled: rand() > 0.08,
         points: vertices.length,
         vertices,
-        paramsOverride: rand() > 0.75 ? { confidence: 0.6 + rand() * 0.3 } : undefined,
       }
     })
   }
@@ -159,19 +176,46 @@ export function makeMockDeployments(seed = 20260311) {
     }
   }
 
+  function makeInstanceSchedule(): InstanceSchedule {
+    const mode: InstanceScheduleMode = rand() > 0.45 ? 'fixed_time' : 'interval'
+    const repeat: RepeatCycle = rand() < 0.6 ? '每天' : rand() < 0.82 ? '工作日' : '周末'
+    if (mode === 'fixed_time') {
+      const p1 = rand() > 0.5 ? '09:00' : '10:00'
+      const p2 = rand() > 0.75 ? '14:00' : ''
+      return {
+        mode,
+        repeat,
+        timePoints: p2 ? [p1, p2] : [p1],
+        intervalMin: 5,
+        intervalSlot: { start: '09:00', end: '18:00' },
+      }
+    }
+    return {
+      mode,
+      repeat,
+      timePoints: ['09:00'],
+      intervalMin: [3, 5, 10, 15][Math.floor(rand() * 4)],
+      intervalSlot: { start: '09:00', end: '18:00' },
+    }
+  }
+
   return Array.from({ length: 10 }).map((_, i): Deployment => {
     const camera = cameras[Math.floor(rand() * cameras.length)]
+    const deploymentRois = makeRois()
     const instanceCount = 1 + Math.floor(rand() * 3)
     const instanceList: AlgorithmInstance[] = Array.from({ length: instanceCount }).map((__, j) => {
       const alg = algorithms[Math.floor(rand() * algorithms.length)]
+      const chosen = deploymentRois.filter((r) => r.enabled && Array.isArray(r.vertices) && r.vertices.length >= 3)
+      const pick = chosen.length ? chosen.slice(0, 1 + Math.floor(rand() * Math.min(2, chosen.length))) : deploymentRois.slice(0, 1)
       return {
         id: `INS-${String(1000 + i * 10 + j).padStart(4, '0')}`,
         algorithmId: alg.id,
         algorithmName: alg.name,
         version: makeVersion(),
         enabled: rand() > 0.15,
-        rois: makeRois(),
+        roiIds: pick.map((x) => x.id),
         params: makeInstanceParams(),
+        schedule: makeInstanceSchedule(),
       }
     })
 
@@ -185,6 +229,7 @@ export function makeMockDeployments(seed = 20260311) {
       cameraLabel: camera.label,
       status,
       runStatus,
+      rois: deploymentRois,
       instances: instanceList,
       params: makeDeploymentParams(),
       updatedAtMs,

@@ -3,15 +3,15 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import AlgorithmInstanceDialog from '@/components/deployments/AlgorithmInstanceDialog.vue'
 import RoiCanvasEditor from '@/components/deployments/RoiCanvasEditor.vue'
 import {
-  defaultDeploymentParams,
   defaultInstanceParams,
+  defaultInstanceSchedule,
   makeCameraOptions,
   type AlgorithmInstance,
   type Deployment,
-  type DeploymentParams,
   type DeploymentStatus,
   type DeploymentRunStatus,
   type RoiShape,
+  type InstanceSchedule,
   type TimeSlot,
 } from '@/utils/deploymentsMock'
 import type { Algorithm } from '@/utils/algorithmsMock'
@@ -89,10 +89,9 @@ const form = reactive<FormModel>({
   enabled: true,
 })
 
-const params = reactive<DeploymentParams>(defaultDeploymentParams())
-
 const instances = ref<AlgorithmInstance[]>([])
 const activeInstanceId = ref('')
+const deploymentRois = ref<RoiShape[]>([])
 
 const formRef = ref()
 const saving = ref(false)
@@ -109,9 +108,8 @@ function resetFromInitial() {
     form.name = ''
     form.cameraId = cameraOptions[0]?.id || ''
     form.enabled = true
-    params.repeat = defaultDeploymentParams().repeat
-    params.timeSlots = defaultDeploymentParams().timeSlots.map((s) => ({ ...s }))
     instances.value = []
+    deploymentRois.value = []
     activeInstanceId.value = ''
     return
   }
@@ -119,22 +117,23 @@ function resetFromInitial() {
   form.name = props.initial.name
   form.cameraId = props.initial.cameraId
   form.enabled = props.initial.status === '已启用'
-  params.repeat = props.initial.params.repeat || defaultDeploymentParams().repeat
-  params.timeSlots = Array.isArray(props.initial.params.timeSlots)
-    ? props.initial.params.timeSlots.map((s) => ({ ...s }))
-    : defaultDeploymentParams().timeSlots.map((s) => ({ ...s }))
   instances.value = props.initial.instances.map((x) => ({
     ...x,
     algorithmName: algorithmOptions.value.find((a) => a.id === x.algorithmId)?.label || x.algorithmName,
-    rois: x.rois.map((r) => ({
-      ...r,
-      enabled: typeof (r as any).enabled === 'boolean' ? (r as any).enabled : true,
-      vertices: Array.isArray((r as any).vertices) ? (r as any).vertices : undefined,
-      points: Array.isArray((r as any).vertices) ? (r as any).vertices.length : (r as any).points || 0,
-      paramsOverride: (r as any).paramsOverride && typeof (r as any).paramsOverride === 'object' ? (r as any).paramsOverride : undefined,
-    })),
+    roiIds: Array.isArray((x as any).roiIds) ? (x as any).roiIds.map((id: any) => String(id || '')).filter(Boolean) : [],
     params: x.params ? { ...x.params } : defaultInstanceParams(),
+    schedule: x.schedule ? { ...x.schedule } : defaultInstanceSchedule(),
   }))
+  deploymentRois.value = Array.isArray((props.initial as any).rois)
+    ? ((props.initial as any).rois as any[]).map((r: any, idx: number) => ({
+        id: String(r.id || makeRoiId()),
+        name: String(r.name || `ROI-${idx + 1}`),
+        type: r.type === 'rect' ? 'rect' : 'polygon',
+        enabled: typeof r.enabled === 'boolean' ? r.enabled : true,
+        vertices: Array.isArray(r.vertices) ? r.vertices : [],
+        points: Array.isArray(r.vertices) ? r.vertices.length : Number(r.points || 0),
+      }))
+    : []
   activeInstanceId.value = instances.value[0]?.id || ''
 }
 
@@ -192,7 +191,7 @@ function openAddInstance() {
 }
 
 function openEditInstance(ins: AlgorithmInstance) {
-  editingInstance.value = { ...ins, rois: ins.rois.map((r) => ({ ...r })), params: { ...ins.params } }
+  editingInstance.value = { ...ins, roiIds: [...(ins.roiIds || [])], params: { ...ins.params }, schedule: { ...ins.schedule } }
   instanceDialogOpen.value = true
 }
 
@@ -203,23 +202,25 @@ function upsertInstance(ins: AlgorithmInstance) {
   activeInstanceId.value = ins.id
 }
 
-function normalizeSlots(slots: TimeSlot[]) {
-  return slots
-    .map((s) => ({ start: String(s.start || '').slice(0, 5), end: String(s.end || '').slice(0, 5) }))
-    .filter((s) => s.start && s.end)
-    .filter((s) => s.start < s.end)
+function normalizeSlot(s: TimeSlot) {
+  const start = String(s.start || '').slice(0, 5)
+  const end = String(s.end || '').slice(0, 5)
+  return { start, end }
 }
 
-function addSlot() {
-  if (params.timeSlots.length >= 8) {
-    ElMessage.warning('最多支持8个时间段')
-    return
+function normalizeSchedule(s: InstanceSchedule): InstanceSchedule {
+  const repeat = s.repeat || '每天'
+  const mode = s.mode === 'interval' ? 'interval' : 'fixed_time'
+  const timePoints = Array.isArray(s.timePoints) ? s.timePoints.map((x) => String(x || '').slice(0, 5)).filter(Boolean) : []
+  const intervalMin = Number(s.intervalMin || 5)
+  const intervalSlot = normalizeSlot(s.intervalSlot || { start: '09:00', end: '18:00' })
+  return {
+    mode,
+    repeat,
+    timePoints: timePoints.length ? timePoints : ['09:00'],
+    intervalMin: Math.min(120, Math.max(1, intervalMin)),
+    intervalSlot: intervalSlot.start < intervalSlot.end ? intervalSlot : { start: '09:00', end: '18:00' },
   }
-  params.timeSlots.push({ start: '09:00', end: '18:00' })
-}
-
-function removeSlot(idx: number) {
-  params.timeSlots.splice(idx, 1)
 }
 
 async function resetAllInstanceParams() {
@@ -232,6 +233,18 @@ async function resetAllInstanceParams() {
     .catch(() => false)
   if (!confirmed) return
   instances.value = instances.value.map((x) => ({ ...x, params: defaultInstanceParams() }))
+}
+
+async function resetAllInstanceSchedules() {
+  const confirmed = await ElMessageBox.confirm('确认将该布点下所有算法实例调度重置为默认值？', '调度重置', {
+    type: 'warning',
+    confirmButtonText: '重置',
+    cancelButtonText: '取消',
+  })
+    .then(() => true)
+    .catch(() => false)
+  if (!confirmed) return
+  instances.value = instances.value.map((x) => ({ ...x, schedule: defaultInstanceSchedule() }))
 }
 
 async function removeInstance(ins: AlgorithmInstance) {
@@ -252,11 +265,10 @@ function makeRoiId() {
 }
 
 function addSampleRoi() {
-  if (!activeInstance.value) return
   const isRect = Math.random() < 0.35
   const next: RoiShape = {
     id: makeRoiId(),
-    name: `ROI-${activeInstance.value.rois.length + 1}`,
+    name: `ROI-${deploymentRois.value.length + 1}`,
     type: isRect ? 'rect' : 'polygon',
     enabled: true,
     points: isRect ? 4 : 5,
@@ -275,13 +287,15 @@ function addSampleRoi() {
           { x: 0.25, y: 0.6 },
         ],
   }
-  const idx = instances.value.findIndex((x) => x.id === activeInstance.value?.id)
-  if (idx < 0) return
-  instances.value[idx] = { ...instances.value[idx], rois: [...instances.value[idx].rois, next] }
+  deploymentRois.value = [...deploymentRois.value, next]
+  const ins = activeInstance.value
+  if (ins && !(ins.roiIds || []).includes(next.id)) {
+    updateActiveInstance({ roiIds: [...(ins.roiIds || []), next.id] })
+  }
 }
 
 function ensureActiveRoi() {
-  const rois = activeInstance.value?.rois || []
+  const rois = deploymentRois.value
   if (activeRoiId.value && rois.some((r) => r.id === activeRoiId.value)) return
   activeRoiId.value = rois[0]?.id || ''
 }
@@ -301,7 +315,7 @@ watch(
 )
 
 const activeRoi = computed(() => {
-  const rois = activeInstance.value?.rois || []
+  const rois = deploymentRois.value
   return rois.find((r) => r.id === activeRoiId.value) || null
 })
 
@@ -311,33 +325,37 @@ function setActiveRoi(id: string) {
 }
 
 function updateActiveInstanceRois(next: RoiShape[]) {
-  if (!activeInstance.value) return
-  const idx = instances.value.findIndex((x) => x.id === activeInstance.value?.id)
-  if (idx < 0) return
-  instances.value[idx] = { ...instances.value[idx], rois: next }
+  deploymentRois.value = next
 }
 
 function newRoi(type: 'rect' | 'polygon') {
-  if (!activeInstance.value) return
   const id = makeRoiId()
   const next: RoiShape = {
     id,
-    name: `ROI-${(activeInstance.value.rois?.length || 0) + 1}`,
+    name: `ROI-${(deploymentRois.value?.length || 0) + 1}`,
     type,
     enabled: true,
     points: 0,
     vertices: [],
   }
-  updateActiveInstanceRois([...(activeInstance.value.rois || []), next])
+  updateActiveInstanceRois([...(deploymentRois.value || []), next])
   activeRoiId.value = id
   roiMode.value = type === 'rect' ? 'draw_rect' : 'draw_polygon'
+
+  // 若已选中算法规则，默认勾选该 ROI（可在规则中取消）
+  const cur = activeInstance.value
+  if (cur) {
+    updateActiveInstance({ roiIds: Array.from(new Set([...(cur.roiIds || []), id])) })
+  }
 }
 
 function cancelDraw() {
   roiMode.value = 'select'
   if (activeRoi.value && (!activeRoi.value.vertices || activeRoi.value.vertices.length < 3)) {
-    const rois = (activeInstance.value?.rois || []).filter((r) => r.id !== activeRoiId.value)
+    const rois = (deploymentRois.value || []).filter((r) => r.id !== activeRoiId.value)
     updateActiveInstanceRois(rois)
+    // 同步把所有实例里引用该 ROI 的 id 移除
+    instances.value = instances.value.map((ins) => ({ ...ins, roiIds: (ins.roiIds || []).filter((id) => id !== activeRoiId.value) }))
     activeRoiId.value = rois[0]?.id || ''
   }
 }
@@ -347,25 +365,15 @@ function completeDraw() {
 }
 
 function removeRoi(id: string) {
-  if (!activeInstance.value) return
-  const rois = (activeInstance.value.rois || []).filter((r) => r.id !== id)
+  const rois = (deploymentRois.value || []).filter((r) => r.id !== id)
   updateActiveInstanceRois(rois)
+  instances.value = instances.value.map((ins) => ({ ...ins, roiIds: (ins.roiIds || []).filter((x) => x !== id) }))
   if (activeRoiId.value === id) activeRoiId.value = rois[0]?.id || ''
   roiMode.value = 'select'
 }
 
-function toggleRoiOverride(roi: RoiShape, enabled: boolean) {
-  const rois = (activeInstance.value?.rois || []).map((r) => {
-    if (r.id !== roi.id) return r
-    if (!enabled) return { ...r, paramsOverride: undefined }
-    return { ...r, paramsOverride: r.paramsOverride || { confidence: undefined, triggerCount: undefined } }
-  })
-  updateActiveInstanceRois(rois)
-}
-
 async function clearRois() {
-  if (!activeInstance.value) return
-  const confirmed = await ElMessageBox.confirm('确认清空当前实例的所有ROI？', '清空ROI', {
+  const confirmed = await ElMessageBox.confirm('确认清空当前布点的全部 ROI 区域？', '清空ROI', {
     type: 'warning',
     confirmButtonText: '清空',
     cancelButtonText: '取消',
@@ -374,15 +382,9 @@ async function clearRois() {
     .catch(() => false)
   if (!confirmed) return
 
-  const idx = instances.value.findIndex((x) => x.id === activeInstance.value?.id)
-  if (idx < 0) return
-  instances.value[idx] = { ...instances.value[idx], rois: [] }
-}
-
-function switchTabSafety() {
-  if (!activeInstanceId.value && instances.value.length) {
-    activeInstanceId.value = instances.value[0].id
-  }
+  deploymentRois.value = []
+  instances.value = instances.value.map((ins) => ({ ...ins, roiIds: [] }))
+  activeRoiId.value = ''
 }
 
 async function onSave() {
@@ -407,16 +409,18 @@ async function onSave() {
       cameraLabel: cameraLabelById(form.cameraId),
       status,
       runStatus,
+      rois: deploymentRois.value.map((r) => ({
+        ...r,
+        points: Array.isArray(r.vertices) ? r.vertices.length : r.points,
+        enabled: typeof (r as any).enabled === 'boolean' ? (r as any).enabled : true,
+      })),
       instances: instances.value.map((x) => ({
         ...x,
-        rois: x.rois.map((r) => ({
-          ...r,
-          points: Array.isArray(r.vertices) ? r.vertices.length : r.points,
-          enabled: typeof (r as any).enabled === 'boolean' ? (r as any).enabled : true,
-        })),
+        roiIds: (x.roiIds || []).filter(Boolean),
         params: { ...x.params },
+        schedule: normalizeSchedule(x.schedule),
       })),
-      params: { repeat: params.repeat, timeSlots: normalizeSlots(params.timeSlots) },
+      params: props.initial?.params || { repeat: '每天', timeSlots: [{ start: '00:00', end: '23:59' }] },
       updatedAtMs: Date.now(),
     })
     open.value = false
@@ -426,210 +430,292 @@ async function onSave() {
   }
 }
 
-const active = ref<'instances' | 'roi' | 'params'>('instances')
-watch(
-  () => active.value,
-  () => switchTabSafety()
-)
+function updateActiveInstance(next: Partial<AlgorithmInstance>) {
+  if (!activeInstance.value) return
+  const idx = instances.value.findIndex((x) => x.id === activeInstance.value?.id)
+  if (idx < 0) return
+  instances.value[idx] = { ...instances.value[idx], ...next }
+}
+
+function scheduleSummary(s: InstanceSchedule) {
+  const ns = normalizeSchedule(s)
+  if (ns.mode === 'fixed_time') return `${ns.repeat} ${ns.timePoints.join('，')}`
+  return `${ns.repeat} ${ns.intervalSlot.start}~${ns.intervalSlot.end} 每${ns.intervalMin}分钟`
+}
+
+const roiOptions = computed(() => deploymentRois.value.map((r) => ({ id: r.id, label: r.name })))
 </script>
 
 <template>
-  <el-dialog v-model="open" :title="title" width="1040" destroy-on-close>
-    <div class="space-y-4">
-      <el-form ref="formRef" :model="form" :rules="rules" label-width="92">
-        <div class="grid grid-cols-1 gap-3 md:grid-cols-3">
-          <el-form-item label="布点名称" prop="name" class="md:col-span-2">
-            <el-input v-model="form.name" placeholder="例如：北门出入口-3 安全帽布点" />
-          </el-form-item>
-          <el-form-item label="启用">
-            <el-switch v-model="form.enabled" />
-          </el-form-item>
-          <el-form-item label="摄像头" prop="cameraId" class="md:col-span-2">
-            <el-select v-model="form.cameraId" placeholder="选择摄像头" filterable>
-              <el-option v-for="c in cameraOptions" :key="c.id" :label="c.label" :value="c.id" />
-            </el-select>
-          </el-form-item>
-          <el-form-item label="实例数量">
-            <el-input :model-value="String(instances.length)" disabled />
-          </el-form-item>
-        </div>
-      </el-form>
-
-      <el-segmented
-        v-model="active"
-        size="small"
-        :options="[
-          { label: '算法实例', value: 'instances' },
-          { label: 'ROI画板', value: 'roi' },
-          { label: '参数配置', value: 'params' },
-        ]"
-      />
-
-      <div v-if="active === 'instances'" class="space-y-3">
-        <div class="flex items-center justify-between">
-          <div class="text-sm font-semibold">算法实例</div>
-          <el-button type="primary" @click="openAddInstance">新增实例</el-button>
-        </div>
-        <el-table :data="instances" size="small" class="table-standard" height="420">
-          <el-table-column prop="algorithmName" label="算法" min-width="180" />
-          <el-table-column label="版本" width="140">
-            <template #default="scope">
-              <span class="font-mono text-xs">{{ scope.row.version }}</span>
-            </template>
-          </el-table-column>
-          <el-table-column label="启用" width="90">
-            <template #default="scope">
-              <el-tag :type="scope.row.enabled ? 'success' : 'info'" size="small">{{ scope.row.enabled ? '启用' : '停用' }}</el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column label="ROI" width="90">
-            <template #default="scope">
-              <span class="font-mono text-xs">{{ scope.row.rois.length }}</span>
-            </template>
-          </el-table-column>
-          <el-table-column label="操作" width="180" fixed="right">
-            <template #default="scope">
-              <div class="flex items-center gap-2">
-                <el-button link type="primary" size="small" @click="activeInstanceId = scope.row.id; active = 'roi'">ROI</el-button>
-                <el-button link type="primary" size="small" @click="openEditInstance(scope.row)">编辑</el-button>
-                <el-button link type="primary" size="small" @click="removeInstance(scope.row)">删除</el-button>
-              </div>
-            </template>
-          </el-table-column>
-        </el-table>
-      </div>
-
-      <div v-else-if="active === 'roi'" class="grid grid-cols-1 gap-3 lg:grid-cols-3">
-        <div class="lg:col-span-2 rounded-xl border border-zinc-200 bg-white p-3">
-          <div class="flex flex-wrap items-center justify-between gap-2">
-            <div>
-              <div class="text-sm font-semibold">ROI画板</div>
-              <div class="mt-1 text-xs text-zinc-500">支持矩形/多边形绘制、拖拽点编辑、拖拽移动与缩放。</div>
+  <el-dialog v-model="open" :title="title" width="1080" destroy-on-close class="deployment-edit-dialog" top="4vh">
+    <div class="max-h-[min(78vh,820px)] overflow-y-auto pr-1">
+      <div class="space-y-6">
+        <!-- 分区：基础信息 -->
+        <section class="rounded-xl border border-zinc-200 bg-zinc-50/80 p-4 shadow-sm">
+          <div class="border-l-4 border-blue-600 pl-3">
+            <div class="text-base font-semibold text-zinc-900">基础信息</div>
+            <p class="mt-1 text-xs leading-relaxed text-zinc-500">布点名称与绑定的摄像头；与下方检测区域、算法规则相互独立，可随时修改。</p>
+          </div>
+          <el-form ref="formRef" :model="form" :rules="rules" label-width="92" class="mt-4">
+            <div class="grid grid-cols-1 gap-3 md:grid-cols-3">
+              <el-form-item label="布点名称" prop="name" class="md:col-span-2">
+                <el-input v-model="form.name" placeholder="例如：北门出入口-3 安全帽布点" />
+              </el-form-item>
+              <el-form-item label="启用">
+                <el-switch v-model="form.enabled" />
+              </el-form-item>
+              <el-form-item label="摄像头" prop="cameraId" class="md:col-span-3">
+                <el-select v-model="form.cameraId" placeholder="选择摄像头" filterable class="max-w-xl">
+                  <el-option v-for="c in cameraOptions" :key="c.id" :label="c.label" :value="c.id" />
+                </el-select>
+              </el-form-item>
             </div>
-            <div class="flex items-center gap-2">
-              <el-select v-model="activeInstanceId" placeholder="选择实例" class="w-[220px]" filterable>
-                <el-option v-for="ins in instances" :key="ins.id" :label="ins.algorithmName" :value="ins.id" />
-              </el-select>
-              <el-button size="small" @click="newRoi('rect')" :disabled="!activeInstance || roiMode !== 'select'">新建矩形</el-button>
-              <el-button size="small" @click="newRoi('polygon')" :disabled="!activeInstance || roiMode !== 'select'">新建多边形</el-button>
-              <el-button v-if="roiMode !== 'select'" size="small" type="primary" @click="completeDraw">完成</el-button>
-              <el-button v-if="roiMode !== 'select'" size="small" @click="cancelDraw">取消</el-button>
-            </div>
+          </el-form>
+        </section>
+
+        <!-- 分区：检测区域（仅 ROI，与算法无关） -->
+        <section class="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm">
+          <div class="border-l-4 border-emerald-600 pl-3">
+            <div class="text-base font-semibold text-zinc-900">检测区域（ROI）</div>
+            <p class="mt-1 text-xs leading-relaxed text-zinc-500">
+              在此画布上绘制或命名检测区域；<span class="font-medium text-zinc-700">无需先添加算法</span>。同一区域可被多条算法规则复用，请在下方「算法规则」中为每条规则勾选生效区域。
+            </p>
           </div>
 
-          <div class="mt-3">
-            <RoiCanvasEditor
-              :rois="activeInstance?.rois || []"
-              :active-id="activeRoiId"
-              :mode="roiMode"
-              :background-url="roiBackgroundUrl"
-              @update:rois="updateActiveInstanceRois"
-              @update:active-id="setActiveRoi"
-              @complete-draw="completeDraw"
-              @cancel-draw="cancelDraw"
-            />
-          </div>
-        </div>
-
-        <div class="rounded-xl border border-zinc-200 bg-white p-3">
-          <div class="flex items-center justify-between gap-2">
-            <div class="text-sm font-semibold">ROI列表</div>
-            <div class="flex items-center gap-2">
-              <el-button size="small" @click="addSampleRoi" :disabled="!activeInstance || roiMode !== 'select'">示例</el-button>
-              <el-button size="small" @click="clearRois" :disabled="!activeInstance || roiMode !== 'select'">清空</el-button>
-            </div>
-          </div>
-
-          <div class="mt-3 space-y-2">
-            <div v-if="!activeInstance" class="text-sm text-zinc-600">暂无实例，请先添加算法实例。</div>
-            <div v-else-if="activeInstance.rois.length === 0" class="text-sm text-zinc-600">暂无ROI</div>
-
-            <div
-              v-else
-              v-for="r in activeInstance.rois"
-              :key="r.id"
-              class="rounded-lg border p-2"
-              :class="r.id === activeRoiId ? 'border-blue-300 bg-blue-50' : 'border-zinc-200 bg-white'"
-              @click="setActiveRoi(r.id)"
-            >
-              <div class="flex items-center justify-between gap-2">
-                <el-input v-model="r.name" size="small" class="w-40" @click.stop />
-                <div class="flex items-center gap-2">
-                  <el-switch v-model="r.enabled" size="small" @click.stop />
-                  <el-tag size="small" :type="r.type === 'rect' ? 'info' : 'success'">{{ r.type === 'rect' ? '矩形' : '多边形' }}</el-tag>
+          <div class="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-3">
+            <div class="lg:col-span-2 rounded-lg border border-zinc-100 bg-zinc-50/50 p-3">
+              <div class="flex flex-wrap items-center justify-between gap-2">
+                <span class="text-xs font-medium text-zinc-600">画布</span>
+                <div class="flex flex-wrap items-center gap-2">
+                  <el-button size="small" @click="newRoi('rect')" :disabled="roiMode !== 'select'">新建矩形</el-button>
+                  <el-button size="small" @click="newRoi('polygon')" :disabled="roiMode !== 'select'">新建多边形</el-button>
+                  <el-button v-if="roiMode !== 'select'" size="small" type="primary" @click="completeDraw">完成</el-button>
+                  <el-button v-if="roiMode !== 'select'" size="small" @click="cancelDraw">取消</el-button>
                 </div>
               </div>
-              <div class="mt-1 flex items-center justify-between">
-                <span class="font-mono text-xs text-zinc-500">{{ r.id }}</span>
-                <span class="text-xs text-zinc-500">点数：{{ (r.vertices?.length || r.points) }}</span>
+              <div class="mt-3">
+                <RoiCanvasEditor
+                  :rois="deploymentRois"
+                  :active-id="activeRoiId"
+                  :mode="roiMode"
+                  :background-url="roiBackgroundUrl"
+                  @update:rois="updateActiveInstanceRois"
+                  @update:active-id="setActiveRoi"
+                  @complete-draw="completeDraw"
+                  @cancel-draw="cancelDraw"
+                />
+              </div>
+            </div>
+
+            <div class="rounded-lg border border-zinc-100 bg-white p-3">
+              <div class="flex items-center justify-between gap-2">
+                <span class="text-xs font-medium text-zinc-600">区域列表</span>
+                <div class="flex items-center gap-2">
+                  <el-button size="small" @click="addSampleRoi" :disabled="roiMode !== 'select'">示例</el-button>
+                  <el-button size="small" @click="clearRois" :disabled="roiMode !== 'select'">清空</el-button>
+                </div>
+              </div>
+              <div class="mt-3 max-h-[420px] space-y-2 overflow-y-auto">
+                <div v-if="deploymentRois.length === 0" class="rounded-lg border border-dashed border-zinc-200 bg-zinc-50 p-4 text-center text-xs text-zinc-500">
+                  暂无区域，请使用「新建矩形 / 多边形」在画布上绘制。
+                </div>
+                <div
+                  v-else
+                  v-for="r in deploymentRois"
+                  :key="r.id"
+                  class="rounded-lg border p-2 transition-colors"
+                  :class="r.id === activeRoiId ? 'border-blue-300 bg-blue-50' : 'border-zinc-200 bg-white'"
+                  @click="setActiveRoi(r.id)"
+                >
+                  <div class="flex items-center justify-between gap-2">
+                    <el-input v-model="r.name" size="small" class="w-40" @click.stop />
+                    <div class="flex items-center gap-2">
+                      <el-switch v-model="r.enabled" size="small" @click.stop />
+                      <el-tag size="small" :type="r.type === 'rect' ? 'info' : 'success'">{{ r.type === 'rect' ? '矩形' : '多边形' }}</el-tag>
+                    </div>
+                  </div>
+                  <div class="mt-1 flex items-center justify-between">
+                    <span class="font-mono text-xs text-zinc-500">{{ r.id }}</span>
+                    <el-button link type="danger" size="small" @click.stop="removeRoi(r.id)">删除</el-button>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
+        </section>
 
-          <div v-if="activeRoi" class="mt-3 rounded-xl border border-zinc-200 bg-zinc-50 p-3">
-            <div class="flex items-center justify-between">
-              <div class="text-sm font-semibold">区域参数</div>
-              <el-button link type="primary" size="small" @click="removeRoi(activeRoi.id)">删除区域</el-button>
+        <!-- 分区：算法规则（列表 + 当前规则详情） -->
+        <section class="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm">
+          <div class="flex flex-wrap items-start justify-between gap-3 border-b border-zinc-100 pb-3">
+            <div class="border-l-4 border-violet-600 pl-3">
+              <div class="text-base font-semibold text-zinc-900">算法规则</div>
+              <p class="mt-1 max-w-3xl text-xs leading-relaxed text-zinc-500">
+                每条规则对应一个算法及其调度、参数。先在左侧新增规则并选择算法；再于右侧为<span class="font-medium text-zinc-700">当前选中规则</span>勾选上方已绘制的 ROI、设置运行时间与检测参数。
+              </p>
             </div>
-
-            <div class="mt-2 flex items-center justify-between">
-              <div class="text-xs text-zinc-500">启用覆盖参数</div>
-              <el-switch :model-value="Boolean(activeRoi.paramsOverride)" @change="(v:any)=>toggleRoiOverride(activeRoi, Boolean(v))" />
+            <div class="flex shrink-0 items-center gap-2">
+              <span class="text-xs text-zinc-500">共 {{ instances.length }} 条</span>
+              <el-button type="primary" size="small" @click="openAddInstance">新增规则</el-button>
             </div>
+          </div>
 
-            <div v-if="activeRoi.paramsOverride" class="mt-3 grid grid-cols-1 gap-3">
-              <div>
-                <div class="text-xs text-zinc-500">置信度阈值（覆盖）</div>
-                <el-input-number v-model="activeRoi.paramsOverride.confidence" :min="0.1" :max="0.99" :step="0.01" class="mt-1 w-full" />
+          <div class="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-12">
+            <div class="lg:col-span-5">
+              <div class="text-xs font-medium text-zinc-600">规则列表</div>
+              <el-table
+                :data="instances"
+                size="small"
+                class="table-standard mt-2"
+                :height="360"
+                highlight-current-row
+                empty-text="暂无规则，请点击「新增规则」"
+                @current-change="(row:any)=> row && (activeInstanceId = row.id)"
+              >
+                <el-table-column label="算法 / 摘要" min-width="200">
+                  <template #default="scope">
+                    <div class="min-w-0 py-1">
+                      <div class="truncate text-sm font-semibold text-zinc-900">{{ scope.row.algorithmName }}</div>
+                      <div class="mt-1 flex flex-wrap items-center gap-x-2 text-xs text-zinc-500">
+                        <span class="font-mono">{{ scope.row.version || 'follow' }}</span>
+                        <span>·</span>
+                        <span>ROI {{ (scope.row.roiIds || []).length }} 个</span>
+                      </div>
+                      <div class="mt-1 text-xs text-zinc-400">{{ scheduleSummary(scope.row.schedule) }}</div>
+                    </div>
+                  </template>
+                </el-table-column>
+                <el-table-column label="启用" width="72" align="center">
+                  <template #default="scope">
+                    <el-switch v-model="scope.row.enabled" />
+                  </template>
+                </el-table-column>
+                <el-table-column label="操作" width="108" fixed="right" align="right">
+                  <template #default="scope">
+                    <el-button link type="primary" size="small" @click.stop="openEditInstance(scope.row)">算法</el-button>
+                    <el-button link type="danger" size="small" @click.stop="removeInstance(scope.row)">删除</el-button>
+                  </template>
+                </el-table-column>
+              </el-table>
+              <div class="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-zinc-100 bg-zinc-50 px-3 py-2 text-xs text-zinc-600">
+                <span>批量重置（预览）</span>
+                <div class="flex gap-2">
+                  <el-button size="small" @click="resetAllInstanceParams" :disabled="instances.length === 0">参数</el-button>
+                  <el-button size="small" @click="resetAllInstanceSchedules" :disabled="instances.length === 0">调度</el-button>
+                </div>
               </div>
-              <div>
-                <div class="text-xs text-zinc-500">触发次数（覆盖）</div>
-                <el-input-number v-model="activeRoi.paramsOverride.triggerCount" :min="1" :max="10" class="mt-1 w-full" />
+            </div>
+
+            <div class="lg:col-span-7 space-y-4">
+              <div v-if="!activeInstance" class="rounded-lg border border-dashed border-zinc-200 bg-zinc-50 p-6 text-center text-sm text-zinc-500">
+                请先在左侧表格中选中一条规则，或点击「新增规则」。
               </div>
+
+              <template v-else>
+                <div class="rounded-lg border border-zinc-100 bg-zinc-50/80 p-3">
+                  <div class="text-xs font-semibold text-zinc-700">当前规则：{{ activeInstance.algorithmName }}</div>
+                  <div class="mt-1 font-mono text-xs text-zinc-500">{{ activeInstance.id }}</div>
+                </div>
+
+                <div class="rounded-lg border border-zinc-100 p-3">
+                  <div class="text-sm font-semibold text-zinc-800">生效区域与运行时间</div>
+                  <div class="mt-3 grid grid-cols-1 gap-3 md:grid-cols-1">
+                    <div>
+                      <div class="text-xs text-zinc-500">生效 ROI</div>
+                      <el-select v-model="activeInstance.roiIds" multiple filterable class="mt-1 w-full" placeholder="勾选本规则要检测的区域">
+                        <el-option v-for="o in roiOptions" :key="o.id" :label="o.label" :value="o.id" />
+                      </el-select>
+                    </div>
+                    <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                      <div>
+                        <div class="text-xs text-zinc-500">调度模式</div>
+                        <el-select v-model="activeInstance.schedule.mode" class="mt-1 w-full">
+                          <el-option label="固定时间点" value="fixed_time" />
+                          <el-option label="按频次" value="interval" />
+                        </el-select>
+                      </div>
+                      <div>
+                        <div class="text-xs text-zinc-500">重复周期</div>
+                        <el-select v-model="activeInstance.schedule.repeat" class="mt-1 w-full">
+                          <el-option label="每天" value="每天" />
+                          <el-option label="工作日" value="工作日" />
+                          <el-option label="周末" value="周末" />
+                          <el-option label="自定义" value="自定义" />
+                        </el-select>
+                      </div>
+                    </div>
+                    <div v-if="activeInstance.schedule.mode === 'fixed_time'">
+                      <div class="flex items-center justify-between">
+                        <div class="text-xs text-zinc-500">时间点</div>
+                        <el-button
+                          size="small"
+                          @click="activeInstance.schedule.timePoints.push('09:00')"
+                          :disabled="activeInstance.schedule.timePoints.length >= 6"
+                        >
+                          新增
+                        </el-button>
+                      </div>
+                      <div class="mt-2 space-y-2">
+                        <div v-for="(t, idx) in activeInstance.schedule.timePoints" :key="idx" class="flex items-center gap-2">
+                          <el-time-select v-model="activeInstance.schedule.timePoints[idx]" start="00:00" step="00:15" end="23:45" class="w-28" />
+                          <el-button link type="primary" size="small" @click="activeInstance.schedule.timePoints.splice(idx, 1)">移除</el-button>
+                        </div>
+                      </div>
+                    </div>
+                    <div v-else>
+                      <div class="text-xs text-zinc-500">频次（分钟）</div>
+                      <el-input-number v-model="activeInstance.schedule.intervalMin" :min="1" :max="120" class="mt-1 w-full max-w-xs" />
+                      <div class="mt-2 text-xs text-zinc-500">时间窗</div>
+                      <div class="mt-1 flex flex-wrap items-center gap-2">
+                        <el-time-select v-model="activeInstance.schedule.intervalSlot.start" start="00:00" step="00:15" end="23:45" class="w-28" />
+                        <span class="text-xs text-zinc-500">~</span>
+                        <el-time-select v-model="activeInstance.schedule.intervalSlot.end" start="00:00" step="00:15" end="23:45" class="w-28" />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="rounded-lg border border-zinc-100 p-3">
+                  <div class="flex items-center justify-between">
+                    <div class="text-sm font-semibold text-zinc-800">检测参数</div>
+                    <el-button size="small" @click="updateActiveInstance({ params: defaultInstanceParams() })">一键重置</el-button>
+                  </div>
+                  <div class="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
+                    <div>
+                      <div class="text-xs text-zinc-500">置信度阈值</div>
+                      <el-input-number v-model="activeInstance.params.confidence" :min="0.1" :max="0.99" :step="0.01" class="mt-1 w-full" />
+                    </div>
+                    <div>
+                      <div class="text-xs text-zinc-500">触发次数</div>
+                      <el-input-number v-model="activeInstance.params.triggerCount" :min="1" :max="10" class="mt-1 w-full" />
+                    </div>
+                    <div>
+                      <div class="text-xs text-zinc-500">冷却时间(秒)</div>
+                      <el-input-number v-model="activeInstance.params.cooldownSec" :min="0" :max="600" class="mt-1 w-full" />
+                    </div>
+                    <div>
+                      <div class="text-xs text-zinc-500">检测灵敏度(0-100)</div>
+                      <el-input-number v-model="activeInstance.params.sensitivity" :min="0" :max="100" class="mt-1 w-full" />
+                    </div>
+                    <div class="md:col-span-2 grid grid-cols-1 gap-3 sm:grid-cols-3">
+                      <div class="rounded-lg border border-zinc-100 bg-zinc-50 p-2">
+                        <div class="text-xs text-zinc-500">联动抓拍</div>
+                        <div class="mt-1"><el-switch v-model="activeInstance.params.linkSnapshot" /></div>
+                      </div>
+                      <div class="rounded-lg border border-zinc-100 bg-zinc-50 p-2">
+                        <div class="text-xs text-zinc-500">报警弹屏</div>
+                        <div class="mt-1"><el-switch v-model="activeInstance.params.popup" /></div>
+                      </div>
+                      <div class="rounded-lg border border-zinc-100 bg-zinc-50 p-2">
+                        <div class="text-xs text-zinc-500">报警声音</div>
+                        <div class="mt-1"><el-switch v-model="activeInstance.params.sound" /></div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </template>
             </div>
           </div>
-        </div>
-      </div>
-
-      <div v-else class="rounded-xl border border-zinc-200 bg-white p-3">
-        <div class="flex flex-wrap items-center justify-between gap-2">
-          <div>
-            <div class="text-sm font-semibold">布防时间</div>
-            <div class="mt-1 text-xs text-zinc-500">设置布点生效的重复周期与时间段。</div>
-          </div>
-          <el-button size="small" @click="resetAllInstanceParams" :disabled="instances.length === 0">实例参数一键重置</el-button>
-        </div>
-
-        <div class="mt-3 grid grid-cols-1 gap-3 md:grid-cols-3">
-          <div>
-            <div class="text-xs text-zinc-500">重复周期</div>
-            <el-select v-model="params.repeat" class="mt-1 w-full">
-              <el-option label="每天" value="每天" />
-              <el-option label="工作日" value="工作日" />
-              <el-option label="周末" value="周末" />
-              <el-option label="自定义" value="自定义" />
-            </el-select>
-          </div>
-          <div class="md:col-span-2">
-            <div class="flex items-center justify-between">
-              <div class="text-xs text-zinc-500">时间段</div>
-              <el-button size="small" @click="addSlot">新增时间段</el-button>
-            </div>
-            <div class="mt-2 space-y-2">
-              <div v-if="!params.timeSlots.length" class="text-xs text-zinc-500">未设置</div>
-              <div v-for="(s, idx) in params.timeSlots" :key="idx" class="flex items-center gap-2">
-                <el-time-select v-model="s.start" start="00:00" step="00:15" end="23:45" class="w-28" />
-                <span class="text-xs text-zinc-500">~</span>
-                <el-time-select v-model="s.end" start="00:00" step="00:15" end="23:45" class="w-28" />
-                <el-button link type="primary" size="small" @click="removeSlot(idx)">移除</el-button>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div class="mt-3 rounded-xl border border-zinc-200 bg-zinc-50 p-3 text-xs text-zinc-600">
-          说明：此处仅配置布点启停时间，实例级检测参数请在“算法实例-编辑”中配置。
-        </div>
+        </section>
       </div>
     </div>
 

@@ -164,7 +164,7 @@ function upsertPerson(payload: {
   fullData.value = list
   savePeople(list)
   refresh()
-  ElMessage.success('已保存（演示）')
+  ElMessage.success('人员信息已保存')
 }
 
 async function removePerson(p: PersonRecord) {
@@ -182,7 +182,7 @@ async function removePerson(p: PersonRecord) {
   savePeople(list)
   writeOp('删除', `删除人员 ${p.name}`, { personId: p.id })
   refresh()
-  ElMessage.success('已删除（演示）')
+  ElMessage.success('人员已删除')
 }
 
 async function setStatus(p: PersonRecord, status: PersonStatus) {
@@ -201,19 +201,31 @@ async function setStatus(p: PersonRecord, status: PersonStatus) {
   savePeople(list)
   writeOp('编辑', `设置人员状态 ${p.name}`, { personId: p.id, status })
   refresh()
-  ElMessage.success('已更新（演示）')
+  ElMessage.success('人员状态已更新')
 }
 
 async function onExport() {
   await new Promise((r) => setTimeout(r, 120))
-  writeOp('导出', '导出人员列表（占位）', { count: fullData.value.length })
-  ElMessage.success('导出已提交（占位）')
+  const payload = {
+    exportedAtMs: Date.now(),
+    count: fullData.value.length,
+    rows: fullData.value,
+  }
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `people_${new Date().toISOString().slice(0, 10)}.json`
+  a.click()
+  URL.revokeObjectURL(url)
+  writeOp('导出', '导出人员列表（演示数据）', { count: fullData.value.length })
+  ElMessage.success('人员列表已导出（演示数据）')
 }
 
 async function onImport() {
   await new Promise((r) => setTimeout(r, 120))
-  writeOp('导入', '导入人员列表（占位）', {})
-  ElMessage.success('导入已提交（占位）')
+  writeOp('导入', '导入人员列表（演示预检）', {})
+  ElMessage.info('导入入口已触发（演示预检），当前版本不覆盖现有数据')
 }
 
 onMounted(() => {

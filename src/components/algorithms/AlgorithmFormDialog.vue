@@ -37,7 +37,7 @@ const form = reactive<FormModel>({
 const formRef = ref()
 const saving = ref(false)
 
-const title = computed(() => (props.initial ? '编辑算法（占位）' : '新增算法（占位）'))
+const title = computed(() => (props.initial ? '编辑算法' : '新增算法'))
 
 const rules = {
   name: [{ required: true, message: '请输入算法名称', trigger: 'blur' }],
@@ -102,7 +102,7 @@ async function onSave() {
       lastSyncAtMs: props.initial?.lastSyncAtMs || Date.now(),
     })
     open.value = false
-    ElMessage.success('已保存（占位）')
+    ElMessage.success('算法信息已保存')
   } finally {
     saving.value = false
   }

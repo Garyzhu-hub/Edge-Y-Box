@@ -4,7 +4,6 @@ import { formatDateTime } from '@/stores/app'
 import CameraFormDialog, { type Camera, type CameraProtocol } from '@/components/devices/CameraFormDialog.vue'
 import SnapshotTestDialog from '@/components/devices/SnapshotTestDialog.vue'
 import LiveStreamDialog from '@/components/devices/LiveStreamDialog.vue'
-import RoiConfigDialog from '@/components/devices/RoiConfigDialog.vue'
 import { cascadeDeleteCameras } from '@/utils/cascadeDelete'
 import {
   computedStatus,
@@ -402,7 +401,6 @@ async function deleteGroup(node: TreeNode) {
 
 const snapshotOpen = ref(false)
 const liveOpen = ref(false)
-const roiOpen = ref(false)
 const activeCamera = ref<Camera | null>(null)
 
 function openSnapshot(c: Camera) {
@@ -413,11 +411,6 @@ function openSnapshot(c: Camera) {
 function openLive(c: Camera) {
   activeCamera.value = c
   liveOpen.value = true
-}
-
-function openRoi(c: Camera) {
-  activeCamera.value = c
-  roiOpen.value = true
 }
 </script>
 
@@ -538,7 +531,6 @@ function openRoi(c: Camera) {
                 <div class="flex items-center gap-2">
                   <el-button link type="primary" size="small" @click="openSnapshot(scope.row)">抓图测试</el-button>
                   <el-button link type="primary" size="small" @click="openLive(scope.row)">直播流</el-button>
-                  <el-button link type="primary" size="small" @click="openRoi(scope.row)">ROI配置</el-button>
                   <el-dropdown trigger="click">
                     <el-button link type="primary" size="small">更多</el-button>
                     <template #dropdown>
@@ -570,6 +562,5 @@ function openRoi(c: Camera) {
     <CameraFormDialog v-model="formOpen" :initial="editing" :groups="formGroups" @saved="upsertCamera" />
     <SnapshotTestDialog v-model="snapshotOpen" :camera="activeCamera" />
     <LiveStreamDialog v-model="liveOpen" :camera="activeCamera" />
-    <RoiConfigDialog v-model="roiOpen" :camera="activeCamera" />
   </div>
 </template>

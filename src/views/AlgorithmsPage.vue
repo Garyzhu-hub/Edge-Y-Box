@@ -199,7 +199,7 @@ async function toggleEnable(a: Algorithm) {
   await new Promise((r) => setTimeout(r, 260))
   fullData.value[idx] = { ...fullData.value[idx], status: next, updatedAtMs: Date.now() }
   saveAlgorithms(fullData.value)
-  ElMessage.success('状态已更新（占位）')
+  ElMessage.success(`算法已${next === '已启用' ? '启用' : '停用'}`)
   refresh()
 }
 
@@ -222,10 +222,16 @@ function openVersionsFromForm(a: Algorithm) {
 }
 
 function upsertAlgorithm(a: Algorithm) {
+  const duplicate = fullData.value.find((x) => x.id !== a.id && x.name.trim() === a.name.trim())
+  if (duplicate) {
+    ElMessage.warning(`算法名称已存在：${duplicate.name}`)
+    return
+  }
   const idx = fullData.value.findIndex((x) => x.id === a.id)
   if (idx >= 0) fullData.value[idx] = a
   else fullData.value.unshift(a)
   saveAlgorithms(fullData.value)
+  ElMessage.success(idx >= 0 ? '算法已更新' : '算法已新增')
   refresh()
 }
 
@@ -382,7 +388,7 @@ async function removeAlgorithm(a: Algorithm) {
 
   fullData.value = fullData.value.filter((x) => x.id !== a.id)
   saveAlgorithms(fullData.value)
-  ElMessage.success('已删除（演示）')
+  ElMessage.success('算法已删除')
   refresh()
 }
 

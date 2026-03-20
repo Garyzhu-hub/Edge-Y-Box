@@ -150,6 +150,8 @@ const saving = ref(false)
 
 const pushLoading = ref(false)
 const pushJobs = ref<AlarmPushJob[]>([])
+const pushChannelFilter = ref<'' | AlarmPushJob['channel']>('')
+const pushStatusFilter = ref<'' | AlarmPushJob['status']>('')
 const pushDetailOpen = ref(false)
 const pushDetail = ref<AlarmPushJob | null>(null)
 
@@ -213,6 +215,20 @@ async function onClearPushJobs() {
 
 refreshPushJobs()
 
+const filteredPushJobs = computed(() =>
+  pushJobs.value.filter((j) => (pushChannelFilter.value ? j.channel === pushChannelFilter.value : true)).filter((j) => (pushStatusFilter.value ? j.status === pushStatusFilter.value : true))
+)
+
+const pushStats = computed(() => {
+  const list = filteredPushJobs.value
+  return {
+    total: list.length,
+    success: list.filter((x) => x.status === '成功').length,
+    failed: list.filter((x) => x.status === '失败').length,
+    processing: list.filter((x) => x.status === '发送中').length,
+  }
+})
+
 const levelRows = computed(() => {
   const rows: { level: AlarmLevel; tips: string }[] = [
     { level: '一般', tips: '默认：仅云端推送' },
@@ -256,7 +272,7 @@ async function onSave() {
       level: 'info',
       module: '报警设置',
       action: '保存',
-      summary: '报警设置已保存（占位）',
+      summary: '报警设置已保存（演示数据）',
       operator: auth.username,
       ip: '127.0.0.1',
       requestId: `alarm_settings_save_${Date.now()}`,
@@ -267,7 +283,7 @@ async function onSave() {
         notify: form.notify,
       },
     })
-    ElMessage.success('已保存（占位）')
+    ElMessage.success('报警设置已保存')
   } finally {
     saving.value = false
   }
@@ -429,17 +445,35 @@ async function onSave() {
     <el-card>
       <div class="flex items-center justify-between">
         <div>
-          <div class="text-sm font-semibold">推送任务（演示）</div>
+          <div class="text-sm font-semibold">推送任务</div>
           <div class="mt-1 text-xs text-zinc-500">展示云端推送/短信/电话推送的任务结果，可重试失败记录。</div>
         </div>
         <div class="flex items-center gap-2">
+          <el-select v-model="pushChannelFilter" clearable placeholder="通道" class="w-28">
+            <el-option label="云端推送" value="cloudPush" />
+            <el-option label="短信" value="sms" />
+            <el-option label="电话" value="phone" />
+          </el-select>
+          <el-select v-model="pushStatusFilter" clearable placeholder="状态" class="w-28">
+            <el-option label="待发送" value="待发送" />
+            <el-option label="发送中" value="发送中" />
+            <el-option label="成功" value="成功" />
+            <el-option label="失败" value="失败" />
+          </el-select>
           <el-button :loading="pushLoading" @click="refreshPushJobs">刷新</el-button>
           <el-button :disabled="!pushJobs.length" :loading="pushLoading" @click="onClearPushJobs">清空</el-button>
         </div>
       </div>
 
+      <div class="mt-3 grid grid-cols-2 gap-2 md:grid-cols-4">
+        <div class="rounded-lg border border-zinc-200 bg-zinc-50 p-2 text-xs text-zinc-600">总数：{{ pushStats.total }}</div>
+        <div class="rounded-lg border border-zinc-200 bg-emerald-50 p-2 text-xs text-emerald-700">成功：{{ pushStats.success }}</div>
+        <div class="rounded-lg border border-zinc-200 bg-amber-50 p-2 text-xs text-amber-700">发送中：{{ pushStats.processing }}</div>
+        <div class="rounded-lg border border-zinc-200 bg-rose-50 p-2 text-xs text-rose-700">失败：{{ pushStats.failed }}</div>
+      </div>
+
       <div class="mt-3">
-        <el-table :data="pushJobs" size="small" height="360" class="table-standard" v-loading="pushLoading">
+        <el-table :data="filteredPushJobs" size="small" height="360" class="table-standard" v-loading="pushLoading">
           <el-table-column label="时间" width="170">
             <template #default="scope">
               <span class="text-xs text-zinc-600">{{ formatDateTime(scope.row.createdAtMs) }}</span>
@@ -483,7 +517,7 @@ async function onSave() {
       </div>
 
       <div class="mt-2 text-xs text-zinc-500">
-        提示：推送链路为演示，真实接入应由后端/网关负责发送、回执、重试与签名校验。
+        提示：推送链路为演示，当前页面用于验证状态机（待发送/发送中/成功/失败）与失败重试交互。
       </div>
     </el-card>
 

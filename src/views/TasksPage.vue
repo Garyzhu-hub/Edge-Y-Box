@@ -139,6 +139,15 @@ const canCreateLocal = computed(() => auth.hasPermission('tasks.create'))
 
 const syncingTasks = ref(false)
 const syncingImages = ref(false)
+const syncStage = ref<'idle' | 'pulling' | 'writing' | 'done' | 'failed'>('idle')
+const syncSummary = ref('')
+const syncError = ref('')
+
+function setSyncStage(stage: 'idle' | 'pulling' | 'writing' | 'done' | 'failed', message = '', error = '') {
+  syncStage.value = stage
+  syncSummary.value = message
+  syncError.value = error
+}
 
 async function syncTasks() {
   const { mqttReady } = cloudStatus()
@@ -147,15 +156,19 @@ async function syncTasks() {
     return
   }
   syncingTasks.value = true
+  setSyncStage('pulling', '正在从 MQTT 入站队列拉取任务...')
   try {
     await new Promise((r) => setTimeout(r, 420))
     const r = syncTasksFromCloud({ count: 6 })
     if (!r.ok) {
+      setSyncStage('failed', '', r.message)
       ElMessage.error(r.message)
       return
     }
+    setSyncStage('writing', '已拉取任务，正在写入本地任务列表...')
     fullData.value = loadTasks().map((t) => normalizeTask(t))
-    ElMessage.success(`已通过 MQTT 入站同步任务 ${r.count} 条（演示）`)
+    setSyncStage('done', `同步完成：新增/更新 ${r.count} 条任务`)
+    ElMessage.success(`已通过 MQTT 入站同步任务 ${r.count} 条`)
     refresh()
   } finally {
     syncingTasks.value = false
@@ -169,20 +182,25 @@ async function syncImages() {
     return
   }
   syncingImages.value = true
+  setSyncStage('pulling', '开始执行 OSS 上传与 MQTT 结果上报...')
   try {
     await new Promise((r) => setTimeout(r, 520))
     const upload = syncImagesToCloud({ maxCount: 80 })
     if (!upload.ok) {
+      setSyncStage('failed', '', upload.message)
       ElMessage.error(upload.message)
       return
     }
+    setSyncStage('writing', `上传阶段完成：成功${upload.uploaded}，失败${upload.failed}；准备上报结果...`)
     const report = reportResultsToCloud({ maxCount: 120 })
     if (!report.ok) {
+      setSyncStage('failed', '', report.message)
       ElMessage.error(report.message)
       return
     }
     const summary = `上传成功${upload.uploaded}，上传失败${upload.failed}；上报成功${report.reported}，上报失败${report.failed}`
-    ElMessage.success(`云端同步完成：${summary}（演示）`)
+    setSyncStage('done', summary)
+    ElMessage.success(`云端同步完成：${summary}`)
   } finally {
     syncingImages.value = false
   }
@@ -372,6 +390,7 @@ async function syncTask(t: SnapshotTask) {
   const idx = fullData.value.findIndex((x) => x.id === t.id)
   if (idx < 0) return
   await new Promise((r) => setTimeout(r, 450))
+  setSyncStage('pulling', `正在同步任务 ${t.id} ...`)
   const pushed = publishTaskToCloud(fullData.value[idx])
   fullData.value[idx] = {
     ...fullData.value[idx],
@@ -379,8 +398,13 @@ async function syncTask(t: SnapshotTask) {
     updatedAtMs: Date.now(),
   }
   saveTasks(fullData.value)
-  if (pushed.ok) ElMessage.success('同步已提交：MQTT任务下发成功（演示）')
-  else ElMessage.error(`同步失败：${pushed.message}`)
+  if (pushed.ok) {
+    setSyncStage('done', `任务 ${t.id} 已下发`)
+    ElMessage.success('同步已提交：MQTT任务下发成功')
+  } else {
+    setSyncStage('failed', '', `任务 ${t.id} 同步失败：${pushed.message}`)
+    ElMessage.error(`同步失败：${pushed.message}`)
+  }
   refresh()
 }
 
@@ -478,6 +502,23 @@ function openDeviceRun(payload: { run: TaskRun }) {
     </el-card>
 
     <el-card>
+      <div class="mb-3 rounded-lg border border-zinc-200 bg-zinc-50 p-3 text-xs">
+        <div class="font-medium text-zinc-700">
+          同步阶段：{{
+            syncStage === 'idle'
+              ? '空闲'
+              : syncStage === 'pulling'
+                ? '拉取中'
+                : syncStage === 'writing'
+                  ? '处理写入中'
+                  : syncStage === 'done'
+                    ? '已完成'
+                    : '失败'
+          }}
+        </div>
+        <div v-if="syncSummary" class="mt-1 text-zinc-600">{{ syncSummary }}</div>
+        <div v-if="syncError" class="mt-1 text-red-600">{{ syncError }}</div>
+      </div>
       <el-table :data="rows" size="small" v-loading="loading" height="560" class="table-standard">
         <el-table-column prop="name" label="任务名称" min-width="240" />
         <el-table-column label="任务ID" min-width="170">
@@ -528,6 +569,15 @@ function openDeviceRun(payload: { run: TaskRun }) {
               <el-button link type="primary" size="small" @click="openDetail(scope.row)">详情</el-button>
               <el-button link type="primary" size="small" @click="openEdit(scope.row)">编辑</el-button>
               <el-button link type="primary" size="small" @click="syncTask(scope.row)">同步</el-button>
+              <el-button
+                v-if="scope.row.syncStatus === '同步失败'"
+                link
+                type="danger"
+                size="small"
+                @click="syncTask(scope.row)"
+              >
+                重试同步
+              </el-button>
               <el-dropdown trigger="click">
                 <el-button link type="primary" size="small">更多</el-button>
                 <template #dropdown>

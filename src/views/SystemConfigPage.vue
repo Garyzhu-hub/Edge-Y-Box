@@ -133,7 +133,7 @@ function onSave(payload: { id: string; value?: string; secretUpdated?: boolean }
   if (cur.type === 'secret') {
     if (!payload.secretUpdated) {
       writeOp('保存', `编辑配置（未改密钥）：${cur.key}`, { id: cur.id, key: cur.key, secretUpdated: false })
-      ElMessage.success('已保存（演示）')
+      ElMessage.success('配置已保存')
       return
     }
     const next: ConfigItem = { ...cur, secretConfigured: true, updatedAtMs: now }
@@ -142,7 +142,7 @@ function onSave(payload: { id: string; value?: string; secretUpdated?: boolean }
     fullData.value = list
     saveConfig(list)
     writeOp('保存', `更新密钥配置：${cur.key}`, { id: cur.id, key: cur.key, secretUpdated: true })
-    ElMessage.success('密钥已更新（演示）')
+    ElMessage.success('密钥已更新')
     refresh()
     return
   }
@@ -153,18 +153,30 @@ function onSave(payload: { id: string; value?: string; secretUpdated?: boolean }
   fullData.value = list
   saveConfig(list)
   writeOp('保存', `更新配置：${cur.key}`, { id: cur.id, key: cur.key, type: cur.type })
-  ElMessage.success('已保存（演示）')
+  ElMessage.success('配置已保存')
   refresh()
 }
 
 function onExport() {
-  writeOp('导出', '导出配置已提交（占位）', { count: fullData.value.length })
-  ElMessage.success('导出已提交（占位）')
+  const payload = {
+    exportedAtMs: Date.now(),
+    count: fullData.value.length,
+    rows: fullData.value,
+  }
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `config_${new Date().toISOString().slice(0, 10)}.json`
+  a.click()
+  URL.revokeObjectURL(url)
+  writeOp('导出', '导出配置（演示数据）', { count: fullData.value.length })
+  ElMessage.success('配置已导出（演示数据）')
 }
 
 function onImport() {
-  writeOp('导入', '导入配置已提交（占位）', {})
-  ElMessage.success('导入已提交（占位）')
+  writeOp('导入', '导入配置预检（演示）', {})
+  ElMessage.info('导入入口已触发（演示预检），当前版本不覆盖现有配置')
 }
 
 function displayValue(item: ConfigItem) {
