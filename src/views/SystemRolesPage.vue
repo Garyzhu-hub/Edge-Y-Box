@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { onMounted, reactive, ref, watch } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { formatDateTime } from '@/stores/app'
+import { useAuthStore } from '@/stores/auth'
 import { appendManualLog } from '@/utils/logsMock'
 import RoleFormDialog from '@/components/system/roles/RoleFormDialog.vue'
 import { makeDefaultRoles, type SystemRole, type RoleStatus } from '@/utils/rolesMock'
@@ -10,6 +11,11 @@ type FilterModel = {
   keyword: string
   status: '' | RoleStatus
 }
+
+const auth = useAuthStore()
+const canCreate = computed(() => auth.hasPermission('system.roles.create'))
+const canEdit = computed(() => auth.hasPermission('system.roles.edit'))
+const canDelete = computed(() => auth.hasPermission('system.roles.delete'))
 
 const STORAGE_KEY = 'edge_roles_v1'
 
@@ -204,22 +210,23 @@ watch([page, pageSize], () => refresh())
       </div>
 
       <div class="flex items-center gap-2">
-        <el-button type="primary" @click="openCreate">新增角色</el-button>
+        <el-button v-if="canCreate" type="primary" @click="openCreate">新增角色</el-button>
       </div>
     </div>
 
     <el-card>
-      <div class="grid grid-cols-1 gap-3 md:grid-cols-6">
-        <el-input v-model="filter.keyword" placeholder="角色名称/描述/ID" clearable />
-        <el-select v-model="filter.status" placeholder="状态" clearable>
-          <el-option label="启用" value="启用" />
-          <el-option label="禁用" value="禁用" />
-        </el-select>
-      </div>
-
-      <div class="mt-3 flex items-center justify-end gap-2">
-        <el-button @click="onReset">重置</el-button>
-        <el-button type="primary" :loading="loading" @click="onSearch">搜索</el-button>
+      <div class="flex flex-col gap-3 min-[900px]:flex-row min-[900px]:flex-wrap min-[900px]:items-center">
+        <div class="grid min-w-0 flex-1 grid-cols-1 gap-3 sm:grid-cols-2">
+          <el-input v-model="filter.keyword" placeholder="角色名称/描述/ID" clearable />
+          <el-select v-model="filter.status" placeholder="状态" clearable>
+            <el-option label="启用" value="启用" />
+            <el-option label="禁用" value="禁用" />
+          </el-select>
+        </div>
+        <div class="flex shrink-0 items-center justify-end gap-2 min-[900px]:pl-2">
+          <el-button @click="onReset">重置</el-button>
+          <el-button type="primary" :loading="loading" @click="onSearch">搜索</el-button>
+        </div>
       </div>
     </el-card>
 
@@ -247,29 +254,30 @@ watch([page, pageSize], () => refresh())
             <span class="text-xs text-zinc-600">{{ formatDateTime(scope.row.createdAtMs) }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="210" fixed="right">
+        <el-table-column label="操作" width="280" fixed="right">
           <template #default="scope">
-            <div class="flex items-center gap-2">
-              <el-button link type="primary" size="small" @click="openEdit(scope.row)">编辑</el-button>
-              <el-dropdown trigger="click">
-                <el-button link type="primary" size="small">更多</el-button>
-                <template #dropdown>
-                  <el-dropdown-menu>
-                    <el-dropdown-item
-                      :disabled="scope.row.id === 'R-00001' || scope.row.id === 'R-00002'"
-                      @click="toggleStatus(scope.row)"
-                    >
-                      {{ scope.row.status === '启用' ? '禁用' : '启用' }}
-                    </el-dropdown-item>
-                    <el-dropdown-item
-                      :disabled="scope.row.id === 'R-00001' || scope.row.id === 'R-00002'"
-                      @click="removeRole(scope.row)"
-                    >
-                      删除
-                    </el-dropdown-item>
-                  </el-dropdown-menu>
-                </template>
-              </el-dropdown>
+            <div class="flex flex-wrap items-center gap-1">
+              <el-button v-if="canEdit" link type="primary" size="small" @click="openEdit(scope.row)">编辑</el-button>
+              <el-button
+                v-if="canEdit"
+                link
+                type="primary"
+                size="small"
+                :disabled="scope.row.id === 'R-00001' || scope.row.id === 'R-00002'"
+                @click="toggleStatus(scope.row)"
+              >
+                {{ scope.row.status === '启用' ? '禁用' : '启用' }}
+              </el-button>
+              <el-button
+                v-if="canDelete"
+                link
+                type="danger"
+                size="small"
+                :disabled="scope.row.id === 'R-00001' || scope.row.id === 'R-00002'"
+                @click="removeRole(scope.row)"
+              >
+                删除
+              </el-button>
             </div>
           </template>
         </el-table-column>

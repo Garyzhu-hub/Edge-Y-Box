@@ -18,7 +18,6 @@ import SystemCloudPage from '@/views/SystemCloudPage.vue'
 import AlarmSettingsPage from '@/views/AlarmSettingsPage.vue'
 import SystemUsersPage from '@/views/SystemUsersPage.vue'
 import SystemRolesPage from '@/views/SystemRolesPage.vue'
-import SystemPermissionsPage from '@/views/SystemPermissionsPage.vue'
 import SystemMenusPage from '@/views/SystemMenusPage.vue'
 import SystemConfigPage from '@/views/SystemConfigPage.vue'
 import SystemInfoPage from '@/views/SystemInfoPage.vue'
@@ -146,12 +145,6 @@ const router = createRouter({
           name: 'system.roles',
           component: SystemRolesPage,
           meta: { title: '角色管理', permission: 'system.roles.view' },
-        },
-        {
-          path: 'system/permissions',
-          name: 'system.permissions',
-          component: SystemPermissionsPage,
-          meta: { title: '角色权限', permission: 'system.permissions.view' },
         },
         {
           path: 'system/menus',

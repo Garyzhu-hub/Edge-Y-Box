@@ -5,6 +5,7 @@ import { appendManualLog } from '@/utils/logsMock'
 import MenuFormDialog from '@/components/system/menus/MenuFormDialog.vue'
 import { buildMenuTree, makeDefaultMenus, type SystemMenuItem, type MenuStatus } from '@/utils/menusMock'
 import { formatDateTime } from '@/stores/app'
+import { useAuthStore } from '@/stores/auth'
 
 type FilterModel = {
   keyword: string
@@ -12,6 +13,11 @@ type FilterModel = {
 }
 
 type MenuRow = SystemMenuItem & { children?: MenuRow[] }
+
+const auth = useAuthStore()
+const canCreate = computed(() => auth.hasPermission('system.menus.create'))
+const canEdit = computed(() => auth.hasPermission('system.menus.edit'))
+const canDelete = computed(() => auth.hasPermission('system.menus.delete'))
 
 const STORAGE_KEY = 'edge_menus_v1'
 
@@ -262,8 +268,8 @@ watch(
       </div>
 
       <div class="flex items-center gap-2">
-        <el-button @click="onResetToDefault">重置默认</el-button>
-        <el-button type="primary" @click="openCreateRoot">新增一级菜单</el-button>
+        <el-button v-if="canEdit" @click="onResetToDefault">重置默认</el-button>
+        <el-button v-if="canCreate" type="primary" @click="openCreateRoot">新增一级菜单</el-button>
       </div>
     </div>
 
@@ -300,10 +306,22 @@ watch(
           <template #default="scope">
             <div class="flex items-center gap-1">
               <span class="w-9 text-xs text-zinc-600">{{ scope.row.order }}</span>
-              <el-button link type="primary" size="small" @click="reorderWithinParent(scope.row.parentId, scope.row.id, 'up')">
+              <el-button
+                v-if="canEdit"
+                link
+                type="primary"
+                size="small"
+                @click="reorderWithinParent(scope.row.parentId, scope.row.id, 'up')"
+              >
                 上移
               </el-button>
-              <el-button link type="primary" size="small" @click="reorderWithinParent(scope.row.parentId, scope.row.id, 'down')">
+              <el-button
+                v-if="canEdit"
+                link
+                type="primary"
+                size="small"
+                @click="reorderWithinParent(scope.row.parentId, scope.row.id, 'down')"
+              >
                 下移
               </el-button>
             </div>
@@ -311,17 +329,17 @@ watch(
         </el-table-column>
         <el-table-column label="操作" width="260" fixed="right">
           <template #default="scope">
-            <div class="flex items-center gap-2">
-              <el-button link type="primary" size="small" @click="openEdit(scope.row)">编辑</el-button>
-              <el-button link type="primary" size="small" @click="openCreateChild(scope.row)">新增子菜单</el-button>
-              <el-dropdown trigger="click">
+            <div class="flex flex-wrap items-center gap-2">
+              <el-button v-if="canEdit" link type="primary" size="small" @click="openEdit(scope.row)">编辑</el-button>
+              <el-button v-if="canCreate" link type="primary" size="small" @click="openCreateChild(scope.row)">新增子菜单</el-button>
+              <el-dropdown v-if="canEdit || canDelete" trigger="click">
                 <el-button link type="primary" size="small">更多</el-button>
                 <template #dropdown>
                   <el-dropdown-menu>
-                    <el-dropdown-item @click="toggleStatus(scope.row)">
+                    <el-dropdown-item v-if="canEdit" @click="toggleStatus(scope.row)">
                       {{ scope.row.status === '显示' ? '隐藏' : '显示' }}
                     </el-dropdown-item>
-                    <el-dropdown-item @click="removeItem(scope.row)">删除</el-dropdown-item>
+                    <el-dropdown-item v-if="canDelete" @click="removeItem(scope.row)">删除</el-dropdown-item>
                   </el-dropdown-menu>
                 </template>
               </el-dropdown>

@@ -1,6 +1,8 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useAppStore, formatDateTime } from '@/stores/app'
+import { useAuthStore } from '@/stores/auth'
 import LogDetailDrawer from '@/components/logs/LogDetailDrawer.vue'
 import {
   kindLabel,
@@ -14,6 +16,16 @@ import {
 const props = defineProps<{ kind: LogKind; title?: string }>()
 
 const app = useAppStore()
+const auth = useAuthStore()
+
+const exportPermissionId = computed(() => {
+  const k = props.kind
+  if (k === 'operation') return 'logs.operation.export'
+  if (k === 'system') return 'logs.system.export'
+  if (k === 'security') return 'logs.security.export'
+  return 'logs.communication.export'
+})
+const canExportLogs = computed(() => auth.hasPermission(exportPermissionId.value))
 
 type FilterModel = {
   keyword: string
@@ -189,7 +201,7 @@ const moduleOptions = computed(() => modulesByKind(props.kind))
         <div class="mt-1 text-xs text-zinc-500">支持筛选、详情查看与导出（演示）。</div>
       </div>
       <div class="flex items-center gap-2">
-        <el-button @click="onExport">导出</el-button>
+        <el-button v-if="canExportLogs" @click="onExport">导出</el-button>
       </div>
     </div>
 

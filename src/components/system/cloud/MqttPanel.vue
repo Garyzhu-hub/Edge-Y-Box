@@ -10,7 +10,9 @@ export type MqttConfig = {
   port: number
   username: string
   clientId: string
+  password: string
   topic: string
+  wsPath: string
   secretConfigured: boolean
 }
 
@@ -67,6 +69,9 @@ const secret = computed({
         </el-form-item>
         <el-form-item label="Port">
           <el-input-number v-model="local.port" :min="1" :max="65535" class="w-full" />
+        </el-form-item>
+        <el-form-item label="WS Path" class="md:col-span-2">
+          <el-input v-model="local.wsPath" placeholder="/mqtt" />
         </el-form-item>
         <el-form-item label="用户名">
           <el-input v-model="local.username" placeholder="edge-box" />

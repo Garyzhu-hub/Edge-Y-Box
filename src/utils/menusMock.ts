@@ -24,8 +24,8 @@ export function makeDefaultMenus(nowMs = Date.now()): SystemMenuItem[] {
     { id: 'M-00022', parentId: 'M-00020', title: '国标级联', path: '/devices/gb-cascade', permission: 'devices.gbCascade.view', status: '显示', order: 20 },
 
     { id: 'M-00030', parentId: null, title: '任务管理', path: '/tasks', permission: 'tasks.view', status: '显示', order: 40 },
-    { id: 'M-00040', parentId: null, title: '算法与布点', path: '/algorithms', permission: 'algorithms.view', status: '显示', order: 50 },
-    { id: 'M-00041', parentId: 'M-00040', title: '算法管理', path: '/algorithms', permission: 'algorithms.view', status: '显示', order: 10 },
+    { id: 'M-00040', parentId: null, title: '算法管理', path: '/algorithms', permission: 'algorithms.view', status: '显示', order: 50 },
+    { id: 'M-00041', parentId: 'M-00040', title: '算法列表', path: '/algorithms', permission: 'algorithms.view', status: '显示', order: 10 },
     { id: 'M-00042', parentId: 'M-00040', title: '布点管理', path: '/deployments', permission: 'deployments.view', status: '显示', order: 20 },
 
     { id: 'M-00050', parentId: null, title: '日志中心', path: '/logs/operation', permission: 'logs.operation.view', status: '显示', order: 60 },
@@ -37,7 +37,6 @@ export function makeDefaultMenus(nowMs = Date.now()): SystemMenuItem[] {
     { id: 'M-00060', parentId: null, title: '系统管理', path: '/system/users', permission: 'system.users.view', status: '显示', order: 70 },
     { id: 'M-00061', parentId: 'M-00060', title: '用户管理', path: '/system/users', permission: 'system.users.view', status: '显示', order: 10 },
     { id: 'M-00062', parentId: 'M-00060', title: '角色管理', path: '/system/roles', permission: 'system.roles.view', status: '显示', order: 20 },
-    { id: 'M-00063', parentId: 'M-00060', title: '角色权限', path: '/system/permissions', permission: 'system.permissions.view', status: '显示', order: 30 },
     { id: 'M-00064', parentId: 'M-00060', title: '菜单管理', path: '/system/menus', permission: 'system.menus.view', status: '显示', order: 40 },
     { id: 'M-00065', parentId: 'M-00060', title: '配置管理', path: '/system/config', permission: 'system.config.view', status: '显示', order: 50 },
     { id: 'M-00066', parentId: 'M-00060', title: '系统信息', path: '/system/info', permission: 'system.info.view', status: '显示', order: 60 },

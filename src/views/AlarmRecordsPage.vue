@@ -2,7 +2,9 @@
 import type { AlarmRecord } from '@/components/alarms/AlarmDetailDialog.vue'
 import AlarmDetailDialog from '@/components/alarms/AlarmDetailDialog.vue'
 import { useRouter, useRoute } from 'vue-router'
+import { computed } from 'vue'
 import { formatDateTime } from '@/stores/app'
+import { useAuthStore } from '@/stores/auth'
 import { useAppStore } from '@/stores/app'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { createWorkOrderFromAlarm } from '@/utils/workOrdersStore'
@@ -26,6 +28,10 @@ const router = useRouter()
 const route = useRoute()
 const app = useAppStore()
 const alarmCenter = useAlarmCenterStore()
+
+const auth = useAuthStore()
+const canDeleteAlarm = computed(() => auth.hasPermission('alarms.records.delete'))
+const canEditWorkOrderFromAlarm = computed(() => auth.hasPermission('workOrders.edit'))
 
 const viewMode = ref<ViewMode>('list')
 
@@ -387,7 +393,13 @@ function tagType(level: AlarmLevel) {
       </div>
 
       <div class="flex items-center gap-2">
-        <el-button :disabled="!selectedRows.length || loading" @click="deleteSelected">删除选中</el-button>
+        <el-button
+          v-if="canDeleteAlarm"
+          :disabled="!selectedRows.length || loading"
+          @click="deleteSelected"
+        >
+          删除选中
+        </el-button>
         <el-button @click="testTrigger">触发测试告警</el-button>
         <el-segmented
           class="alarm-view-segmented"
@@ -483,7 +495,10 @@ function tagType(level: AlarmLevel) {
             >
               {{ scope.row.workOrderId }}
             </el-button>
-            <el-button v-else link type="primary" size="small" @click="createWorkOrder(scope.row)">生成工单</el-button>
+            <template v-else-if="canEditWorkOrderFromAlarm">
+              <el-button link type="primary" size="small" @click="createWorkOrder(scope.row)">生成工单</el-button>
+            </template>
+            <span v-else class="text-xs text-zinc-400">—</span>
           </template>
         </el-table-column>
         <el-table-column label="状态" width="80">
@@ -503,7 +518,15 @@ function tagType(level: AlarmLevel) {
             <el-button link type="primary" size="small" @click="openDetail(scope.row)">
               查看详情
             </el-button>
-            <el-button link type="danger" size="small" @click="deleteOne(scope.row)">删除</el-button>
+            <el-button
+              v-if="canDeleteAlarm"
+              link
+              type="danger"
+              size="small"
+              @click="deleteOne(scope.row)"
+            >
+              删除
+            </el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -558,8 +581,17 @@ function tagType(level: AlarmLevel) {
             >
               {{ r.workOrderId }}
             </el-button>
-            <el-button v-else link type="primary" size="small" @click.stop="createWorkOrder(r)">生成工单</el-button>
-            <el-button link type="danger" size="small" @click.stop="deleteOne(r)">删除</el-button>
+            <el-button
+              v-else-if="canEditWorkOrderFromAlarm"
+              link
+              type="primary"
+              size="small"
+              @click.stop="createWorkOrder(r)"
+            >
+              生成工单
+            </el-button>
+            <span v-else class="text-xs text-zinc-400">—</span>
+            <el-button v-if="canDeleteAlarm" link type="danger" size="small" @click.stop="deleteOne(r)">删除</el-button>
           </div>
         </div>
 

@@ -224,7 +224,7 @@ function normalizeSchedule(s: InstanceSchedule): InstanceSchedule {
 }
 
 async function resetAllInstanceParams() {
-  const confirmed = await ElMessageBox.confirm('确认将该布点下所有算法实例参数重置为默认值？', '参数重置', {
+  const confirmed = await ElMessageBox.confirm('确认将该布点下所有算法规则的检测参数重置为默认值？', '参数重置', {
     type: 'warning',
     confirmButtonText: '重置',
     cancelButtonText: '取消',
@@ -236,7 +236,7 @@ async function resetAllInstanceParams() {
 }
 
 async function resetAllInstanceSchedules() {
-  const confirmed = await ElMessageBox.confirm('确认将该布点下所有算法实例调度重置为默认值？', '调度重置', {
+  const confirmed = await ElMessageBox.confirm('确认将该布点下所有算法规则的调度重置为默认值？', '调度重置', {
     type: 'warning',
     confirmButtonText: '重置',
     cancelButtonText: '取消',
@@ -248,7 +248,7 @@ async function resetAllInstanceSchedules() {
 }
 
 async function removeInstance(ins: AlgorithmInstance) {
-  const confirmed = await ElMessageBox.confirm(`确认删除算法实例「${ins.algorithmName}」？`, '删除确认', {
+  const confirmed = await ElMessageBox.confirm(`确认删除算法规则「${ins.algorithmName}」？`, '删除确认', {
     type: 'warning',
     confirmButtonText: '删除',
     cancelButtonText: '取消',
@@ -392,7 +392,7 @@ async function onSave() {
   const ok = await formRef.value.validate().catch(() => false)
   if (!ok) return
   if (instances.value.length === 0) {
-    ElMessage.warning('请至少添加一个算法实例（占位约束）')
+    ElMessage.warning('请至少添加一条算法规则')
     return
   }
 
@@ -424,7 +424,7 @@ async function onSave() {
       updatedAtMs: Date.now(),
     })
     open.value = false
-    ElMessage.success('已保存布点（占位）')
+    ElMessage.success('已保存布点')
   } finally {
     saving.value = false
   }
@@ -597,7 +597,7 @@ const roiOptions = computed(() => deploymentRois.value.map((r) => ({ id: r.id, l
                 </el-table-column>
               </el-table>
               <div class="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-zinc-100 bg-zinc-50 px-3 py-2 text-xs text-zinc-600">
-                <span>批量重置（预览）</span>
+                <span>批量重置</span>
                 <div class="flex gap-2">
                   <el-button size="small" @click="resetAllInstanceParams" :disabled="instances.length === 0">参数</el-button>
                   <el-button size="small" @click="resetAllInstanceSchedules" :disabled="instances.length === 0">调度</el-button>

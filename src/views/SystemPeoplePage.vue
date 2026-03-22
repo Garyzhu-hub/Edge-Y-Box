@@ -2,6 +2,7 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { formatDateTime } from '@/stores/app'
+import { useAuthStore } from '@/stores/auth'
 import { appendManualLog } from '@/utils/logsMock'
 import PersonFormDialog from '@/components/system/people/PersonFormDialog.vue'
 import { makeDefaultPeople, type PersonRecord, type PersonStatus } from '@/utils/peopleMock'
@@ -12,6 +13,11 @@ type FilterModel = {
   status: '' | PersonStatus
   tag: '' | string
 }
+
+const auth = useAuthStore()
+const canCreate = computed(() => auth.hasPermission('system.people.create'))
+const canEdit = computed(() => auth.hasPermission('system.people.edit'))
+const canDelete = computed(() => auth.hasPermission('system.people.delete'))
 
 const STORAGE_KEY = 'edge_people_v1'
 
@@ -244,9 +250,9 @@ watch([page, pageSize], () => refresh())
         <div class="mt-1 text-xs text-zinc-500">用于报警通知人员配置与通讯录台账（演示）。</div>
       </div>
       <div class="flex items-center gap-2">
-        <el-button @click="onImport">导入</el-button>
-        <el-button @click="onExport">导出</el-button>
-        <el-button type="primary" @click="openCreate">新增人员</el-button>
+        <el-button v-if="canEdit" @click="onImport">导入</el-button>
+        <el-button v-if="canEdit" @click="onExport">导出</el-button>
+        <el-button v-if="canCreate" type="primary" @click="openCreate">新增人员</el-button>
       </div>
     </div>
 
@@ -297,16 +303,25 @@ watch([page, pageSize], () => refresh())
         </el-table-column>
         <el-table-column label="操作" width="220" fixed="right">
           <template #default="scope">
-            <div class="flex items-center gap-2">
-              <el-button link type="primary" size="small" @click="openEdit(scope.row)">编辑</el-button>
-              <el-dropdown trigger="click">
+            <div class="flex flex-wrap items-center gap-2">
+              <el-button v-if="canEdit" link type="primary" size="small" @click="openEdit(scope.row)">编辑</el-button>
+              <el-dropdown v-if="canEdit || canDelete" trigger="click">
                 <el-button link type="primary" size="small">更多</el-button>
                 <template #dropdown>
                   <el-dropdown-menu>
-                    <el-dropdown-item @click="setStatus(scope.row, scope.row.status === '在职' ? '离职' : '在职')">
+                    <el-dropdown-item
+                      v-if="canEdit"
+                      @click="setStatus(scope.row, scope.row.status === '在职' ? '离职' : '在职')"
+                    >
                       {{ scope.row.status === '在职' ? '设为离职' : '设为在职' }}
                     </el-dropdown-item>
-                    <el-dropdown-item :disabled="scope.row.id === 'u_admin'" @click="removePerson(scope.row)">删除</el-dropdown-item>
+                    <el-dropdown-item
+                      v-if="canDelete"
+                      :disabled="scope.row.id === 'u_admin'"
+                      @click="removePerson(scope.row)"
+                    >
+                      删除
+                    </el-dropdown-item>
                   </el-dropdown-menu>
                 </template>
               </el-dropdown>

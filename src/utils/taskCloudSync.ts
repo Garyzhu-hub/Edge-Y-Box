@@ -2,9 +2,21 @@ import type { SnapshotTask, TaskRun, DeviceRun, ResultCode, SyncResult } from '@
 import type { TreeNode } from '@/utils/devicesCamerasMock'
 import type { Camera } from '@/components/devices/CameraFormDialog.vue'
 import { appendManualLog } from '@/utils/logsMock'
+import { mqttRequestJson, type CloudMqttConfig } from '@/utils/cloud/mqttClient'
 
 type PersistedCloud = {
-  mqtt: { enabled: boolean; host: string; port: number; username: string; clientId: string; topic: string; secretConfigured: boolean }
+  boxMac: string
+  mqtt: {
+    enabled: boolean
+    host: string
+    port: number
+    username: string
+    clientId: string
+    topic: string
+    wsPath: string
+    password: string
+    secretConfigured: boolean
+  }
   oss: { enabled: boolean; endpoint: string; bucket: string; region: string; accessKeyId: string; secretConfigured: boolean }
 }
 
@@ -34,6 +46,7 @@ function loadCloud(): PersistedCloud | null {
 
 export function cloudStatus() {
   const cloud = loadCloud()
+  const boxMacReady = !!cloud?.boxMac?.trim()
   const mqttReady = !!(
     cloud?.mqtt?.enabled &&
     cloud.mqtt.host &&
@@ -41,17 +54,13 @@ export function cloudStatus() {
     cloud.mqtt.username &&
     cloud.mqtt.clientId &&
     cloud.mqtt.topic &&
-    cloud.mqtt.secretConfigured
+    cloud.mqtt.secretConfigured &&
+    cloud.mqtt.password
   )
   const ossReady = !!(
-    cloud?.oss?.enabled &&
-    cloud.oss.endpoint &&
-    cloud.oss.bucket &&
-    cloud.oss.region &&
-    cloud.oss.accessKeyId &&
-    cloud.oss.secretConfigured
+    cloud?.oss?.enabled
   )
-  return { mqttReady, ossReady }
+  return { mqttReady, ossReady, boxMacReady, boxMac: cloud?.boxMac || '' }
 }
 
 function loadJson<T>(key: string, fallback: T): T {
@@ -85,10 +94,6 @@ function makeId(prefix: string) {
   return `${prefix}-${String(n).padStart(5, '0')}`
 }
 
-function pick<T>(list: T[]) {
-  return list[Math.floor(Math.random() * Math.max(1, list.length))]
-}
-
 function addCloudLog(key: string, row: Record<string, unknown>) {
   const list = loadJson<Record<string, unknown>[]>(key, [])
   list.unshift(row)
@@ -104,85 +109,132 @@ function saveReportedIds(ids: Set<string>) {
   saveJson(CLOUD_REPORTED_IDS_KEY, Array.from(ids).slice(-5000))
 }
 
-function cloudPath(params: { bucket: string; taskId: string; runId: string; deviceId: string; tsMs: number }) {
-  const d = new Date(params.tsMs)
-  const y = d.getFullYear()
-  const m = String(d.getMonth() + 1).padStart(2, '0')
-  const day = String(d.getDate()).padStart(2, '0')
-  return `oss://${params.bucket}/edge-ybox/${y}${m}${day}/${params.taskId}/${params.runId}/${params.deviceId}.jpg`
-}
 
-function buildIncomingCloudTasks(params: {
-  count: number
-  groups: { id: string; label: string }[]
-  cameras: Camera[]
-  now: number
-}) {
-  const { count, groups, cameras, now } = params
-  return Array.from({ length: count }).map((_, i): SnapshotTask => {
-    const group = groups.length ? pick(groups) : { id: 'a-l1', label: '默认分组' }
-    const cameraPool = cameras.filter((c) => c.groupId === group.id)
-    const deviceIds = (cameraPool.length ? cameraPool : cameras).slice(0, 6).map((c) => c.id)
-    const id = `TASK-SNAP-${makeId('CLD')}`
-    const planType = Math.random() > 0.5 ? '周计划' : '假日计划'
-    const weekPlan = { mon: [], tue: [], wed: [], thu: [], fri: [], sat: [], sun: [] }
-    if (planType === '周计划') weekPlan.mon = [{ start: '09:00', end: '18:00' }]
-    const holidayPlan =
-      planType === '假日计划'
-        ? [{ date: new Date(now + 2 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10), slots: [{ start: '10:00', end: '16:00' }] }]
-        : []
-
-    return {
-      id,
-      name: `云端下发抓图-${group.label}-${i + 1}`,
-      groupId: group.id,
-      groupLabel: group.label,
-      deviceIds,
-      deviceCount: deviceIds.length || 6,
-      intervalMin: [1, 3, 5, 10, 15][i % 5],
-      planType: planType as any,
-      weekPlan: weekPlan as any,
-      holidayPlan: holidayPlan as any,
-      syncMode: '自动同步',
-      status: '已启用',
-      syncStatus: '待同步',
-      updatedAtMs: now - i * 60_000,
-      lastRunAtMs: now - i * 60_000,
-      lastRunStatus: '成功',
-    }
-  })
-}
-
-export function syncTasksFromCloud(params: { count?: number }) {
-  const { mqttReady } = cloudStatus()
+export async function syncTasksFromCloud(params: { count?: number }) {
+  const cloud = loadCloud()
+  const { mqttReady, boxMacReady, boxMac } = cloudStatus()
   if (!mqttReady) return { ok: false as const, message: 'MQTT未配置或未启用' }
+  if (!boxMacReady) return { ok: false as const, message: 'Box MAC未设置（用于 `{mac}` MQTT 主题）' }
+  if (!cloud) return { ok: false as const, message: '云配置异常' }
 
   const groupsTree = loadJson<TreeNode[]>(GROUPS_KEY, [])
   const groups = flattenTree(groupsTree)
   const cameras = loadJson<Camera[]>(CAMERAS_KEY, [])
-  const tasks = loadJson<SnapshotTask[]>(TASKS_KEY, [])
 
-  const count = params.count ?? 6
-  const now = Date.now()
-  const inbox = loadJson<SnapshotTask[]>(CLOUD_TASK_INBOX_KEY, [])
-  const incoming = inbox.length
-    ? inbox.slice(0, count).map((x, i) => ({ ...x, updatedAtMs: now - i * 60_000 }))
-    : buildIncomingCloudTasks({ count, groups, cameras, now })
+  const makeWeekPlan = () => ({ mon: [], tue: [], wed: [], thu: [], fri: [], sat: [], sun: [] } as any)
+  const toHHmm = (v: unknown) => String(v || '').slice(0, 5)
 
-  const map = new Map(tasks.map((t) => [t.id, t]))
-  for (const t of incoming) map.set(t.id, { ...t, syncStatus: '已同步', updatedAtMs: Date.now() })
-  const merged = Array.from(map.values()).sort((a, b) => b.updatedAtMs - a.updatedAtMs)
+  function cloudTaskToSnapshot(t: any): SnapshotTask {
+    const deviceIds: string[] = Array.isArray(t.cameraIds) ? t.cameraIds : Array.isArray(t.deviceIds) ? t.deviceIds : []
+    const firstCam = deviceIds.length ? cameras.find((c) => c.id === deviceIds[0]) : null
+    const groupId = firstCam?.groupId || 'all'
+    const groupLabel = groups.find((g) => g.id === groupId)?.label || firstCam?.name || '—'
+
+    const status = t.operateType === 2 ? ('已停用' as const) : ('已启用' as const)
+    const intervalMin = Number(t.fixedRate ?? 3) || 3
+
+    const weekPlan = makeWeekPlan()
+    const weekTimes: any[] = Array.isArray(t.weekTimes) ? t.weekTimes : []
+    const dayOfWeekMap: Record<number, keyof typeof weekPlan> = {
+      1: 'mon',
+      2: 'tue',
+      3: 'wed',
+      4: 'thu',
+      5: 'fri',
+      6: 'sat',
+      7: 'sun',
+    }
+    for (const d of weekTimes) {
+      const dayKey = dayOfWeekMap[Number(d.dayOfWeek)]
+      if (!dayKey) continue
+      const segs: any[] = Array.isArray(d.timeSegments) ? d.timeSegments : []
+      for (const s of segs) {
+        const start = toHHmm(s.startTime)
+        const end = toHHmm(s.endTime)
+        if (!start || !end) continue
+        if (start >= end) continue
+        ;(weekPlan[dayKey] as any[]).push({ start, end })
+      }
+    }
+
+    const holidayTimes: any[] = Array.isArray(t.holidayTimes) ? t.holidayTimes : []
+    const holidayPlan = holidayTimes.map((h) => {
+      const date = String(h.startDay || '').slice(0, 10)
+      const segs: any[] = Array.isArray(h.timeSegments) ? h.timeSegments : []
+      return {
+        date,
+        slots: segs
+          .map((s) => ({ start: toHHmm(s.startTime), end: toHHmm(s.endTime) }))
+          .filter((x) => x.start && x.end && x.start < x.end),
+      }
+    })
+    const holidayPlanNormalized = holidayPlan.filter((x) => x.date && Array.isArray(x.slots) && x.slots.length)
+
+    const planType = holidayPlanNormalized.length ? '假日计划' : '周计划'
+
+    const now = Date.now()
+    return {
+      id: String(t.id || `TASK-SNAP-${makeId('CLD')}`),
+      name: String(t.name || '云端下发抓图任务'),
+      groupId,
+      groupLabel,
+      deviceIds,
+      deviceCount: deviceIds.length,
+      intervalMin,
+      planType: planType as any,
+      weekPlan,
+      holidayPlan: holidayPlanNormalized as any,
+      syncMode: '自动同步',
+      status,
+      syncStatus: '已同步',
+      updatedAtMs: now,
+      lastRunAtMs: now,
+      lastRunStatus: '成功',
+    }
+  }
+
+  const cfg: CloudMqttConfig = {
+    host: cloud.mqtt.host,
+    port: cloud.mqtt.port,
+    username: cloud.mqtt.username,
+    clientId: cloud.mqtt.clientId,
+    password: cloud.mqtt.password,
+    wsPath: cloud.mqtt.wsPath,
+  }
+
+  // 5.3.4 查询云端任务列表
+  const replyTopic = `cloud2edge/task/v1/query/${boxMac}`
+  const requestTopic = 'edge2cloud/task/v1/query'
+  const pageSize = params.count ?? 6
+
+  const res = await mqttRequestJson({
+    cfg,
+    mac: boxMac,
+    requestTopic,
+    replyTopic,
+    data: { pageNum: 1, pageSize, mac: boxMac },
+    timeoutMs: 12_000,
+  })
+
+  const code = (res as any)?.code
+  const ok = code === undefined ? true : code === 0
+  if (!ok) {
+    return { ok: false as const, message: `MQTT查询任务失败（code=${code}）` }
+  }
+
+  const list = Array.isArray((res as any)?.data?.list) ? (res as any).data.list : []
+  const incoming = list.map(cloudTaskToSnapshot)
+  const merged = incoming.slice().sort((a, b) => b.updatedAtMs - a.updatedAtMs)
   saveJson(TASKS_KEY, merged)
-  saveJson(
-    CLOUD_TASK_INBOX_KEY,
-    inbox.length ? inbox.slice(incoming.length) : buildIncomingCloudTasks({ count: Math.max(3, Math.floor(count / 2)), groups, cameras, now: now + 60_000 })
-  )
+  saveJson(CLOUD_TASK_INBOX_KEY, [])
+
+  const now = Date.now()
   addCloudLog(CLOUD_TASK_ACK_OUTBOX_KEY, {
     id: `ack_${now}`,
     tsMs: now,
     action: 'pull_tasks',
-    count: incoming.length,
-    topic: loadCloud()?.mqtt?.topic || '',
+    count: merged.length,
+    topic: cloud.mqtt.topic || '',
   })
   appendManualLog({
     kind: 'communication',
@@ -190,13 +242,14 @@ export function syncTasksFromCloud(params: { count?: number }) {
     level: 'info',
     module: '任务管理',
     action: 'MQTT任务同步',
-    summary: `接收并落库 ${incoming.length} 条任务`,
+    summary: `已从云端查询并落库 ${merged.length} 条任务`,
     operator: 'admin',
     ip: '127.0.0.1',
     requestId: `mqtt_pull_${now}`,
-    detail: { count: incoming.length },
+    detail: { count: merged.length, replyTopic, requestTopic },
   })
-  return { ok: true as const, count: incoming.length }
+
+  return { ok: true as const, count: merged.length }
 }
 
 export function persistTaskRuns(taskId: string, runs: TaskRun[]) {
@@ -221,74 +274,201 @@ export function loadDeviceRuns(runId: string) {
   return Array.isArray(store[runId]) ? store[runId] : []
 }
 
-function codeToMessage(code: ResultCode) {
-  if (code === 0) return '成功'
-  if (code === 100) return '摄像头离线'
-  if (code === 101) return '摄像头直播流地址错误'
-  if (code === 102) return '摄像头不存在'
-  if (code === 200) return '任务太密集'
-  if (code === 300) return '资源不足'
-  return '其他'
+const OSS_KEY_PREFIX = 'edge-ybox/'
+let ossPolicyCache: null | {
+  expireAtMs: number
+  host: string
+  accessId: string
+  policy: string
+  signature: string
+  ossKeyPrefix: string
 }
 
-export function syncImagesToCloud(params: { maxCount?: number }) {
-  const { mqttReady, ossReady } = cloudStatus()
+function toObjectKey(params: { tsMs: number; taskId: string; runId: string; cameraId: string; ossKeyPrefix: string }) {
+  const d = new Date(params.tsMs)
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  const file = `${params.cameraId}.jpg`
+  return `${params.ossKeyPrefix}${y}${m}${day}/${params.taskId}/${params.runId}/${file}`
+}
+
+function parseAliOssLocation(xmlText: string) {
+  const m = xmlText.match(/<Location>([^<]+)<\/Location>/i)
+  return m?.[1] ? String(m[1]) : ''
+}
+
+export async function getOssPolicy(cfg: CloudMqttConfig, mac: string) {
+  const now = Date.now()
+  if (ossPolicyCache && ossPolicyCache.expireAtMs > now + 5_000) return ossPolicyCache
+
+  const res = await mqttRequestJson({
+    cfg,
+    mac,
+    requestTopic: 'edge2cloud/box/v1/get-oss',
+    replyTopic: `cloud2edge/box/v1/get-oss/${mac}`,
+    data: { ossKey: OSS_KEY_PREFIX },
+    timeoutMs: 12_000,
+  })
+
+  const data = (res as any)?.data || {}
+  const accessId = String(data.accessId || '')
+  const policy = String(data.policy || '')
+  const signature = String(data.signature || '')
+  const host = String(data.host || '')
+  const expireSec = Number(data.expire || 0)
+  const ossKeyPrefix = String(data.ossKey || OSS_KEY_PREFIX).trim()
+
+  if (!accessId || !policy || !signature || !host || !expireSec) {
+    throw new Error('OSS鉴权信息不完整（get-oss返回字段缺失）')
+  }
+
+  const expireAtMs = expireSec * 1000
+  ossPolicyCache = { expireAtMs, host, accessId, policy, signature, ossKeyPrefix }
+  return ossPolicyCache
+}
+
+async function uploadBlobToOss(params: {
+  cfg: CloudMqttConfig
+  mac: string
+  tsMs: number
+  taskId: string
+  runId: string
+  cameraId: string
+  snapshotUrl: string
+}): Promise<{ picUrl: string }> {
+  const policy = await getOssPolicy(params.cfg, params.mac)
+
+  // Aliyun OSS post-policy upload (FormData) -> response includes `<Location>`.
+  const objectKey = toObjectKey({
+    tsMs: params.tsMs,
+    taskId: params.taskId,
+    runId: params.runId,
+    cameraId: params.cameraId,
+    ossKeyPrefix: policy.ossKeyPrefix.endsWith('/') ? policy.ossKeyPrefix : `${policy.ossKeyPrefix}/`,
+  })
+
+  const imgResp = await fetch(params.snapshotUrl).catch(() => null)
+  if (!imgResp || !imgResp.ok) throw new Error('抓图图片下载失败（用于OSS上传）')
+  const blob = await imgResp.blob()
+
+  const fd = new FormData()
+  fd.append('key', objectKey)
+  fd.append('policy', policy.policy)
+  fd.append('OSSAccessKeyId', policy.accessId)
+  fd.append('signature', policy.signature)
+  fd.append('success_action_status', '200')
+  fd.append('file', blob)
+
+  const uploadResp = await fetch(policy.host, {
+    method: 'POST',
+    body: fd,
+  })
+
+  if (!uploadResp.ok) throw new Error(`OSS上传HTTP失败：${uploadResp.status}`)
+  const xmlText = await uploadResp.text()
+  const picUrl = parseAliOssLocation(xmlText)
+  // Fallback: construct URL from host + objectKey.
+  return { picUrl: picUrl || `${policy.host}/${objectKey}` }
+}
+
+export async function syncImagesToCloud(params: { maxCount?: number }) {
+  const cloud = loadCloud()
+  const { mqttReady, ossReady, boxMacReady, boxMac } = cloudStatus()
   if (!mqttReady) return { ok: false as const, message: 'MQTT未配置或未启用' }
-  if (!ossReady) return { ok: false as const, message: 'OSS未配置或未启用' }
+  if (!ossReady) return { ok: false as const, message: 'OSS未启用' }
+  if (!boxMacReady) return { ok: false as const, message: 'Box MAC未设置' }
+  if (!cloud) return { ok: false as const, message: '云配置异常' }
 
   const deviceStore = loadJson<Record<string, DeviceRun[]>>(DEVICE_RUNS_KEY, {})
   const max = params.maxCount ?? 60
   let uploaded = 0
   let failed = 0
-  const bucket = loadCloud()?.oss?.bucket || 'edge-ybox'
   const now = Date.now()
+
+  const cfg: CloudMqttConfig = {
+    host: cloud.mqtt.host,
+    port: cloud.mqtt.port,
+    username: cloud.mqtt.username,
+    clientId: cloud.mqtt.clientId,
+    password: cloud.mqtt.password,
+    wsPath: cloud.mqtt.wsPath,
+  }
 
   for (const runId of Object.keys(deviceStore)) {
     if (uploaded + failed >= max) break
     const rows = deviceStore[runId]
     if (!Array.isArray(rows) || !rows.length) continue
-    const nextRows = rows.map((r) => {
-      if (uploaded + failed >= max) return r
-      if (r.synced) return r
-      const waitReport = String(r.syncMessage || '').includes('待MQTT上报')
-      if (waitReport) return r
-      const ok = r.status === '成功' ? Math.random() > 0.08 : Math.random() > 0.5
-      const code: ResultCode = ok
-        ? 0
-        : r.status === '失败'
-          ? (Math.random() < 0.35 ? 100 : Math.random() < 0.6 ? 101 : Math.random() < 0.8 ? 102 : 999)
-          : Math.random() < 0.5
-            ? 200
-            : Math.random() < 0.75
-              ? 300
-              : 999
-      const syncResult: SyncResult = ok ? '成功' : '失败'
-      const path = cloudPath({
-        bucket,
-        taskId: r.id.split('-').slice(0, 2).join('-') || 'task',
-        runId: r.runId,
-        deviceId: r.id,
-        tsMs: r.capturedAtMs || now,
-      })
-      if (ok) uploaded += 1
-      else failed += 1
-      addCloudLog(CLOUD_OSS_UPLOAD_LOG_KEY, {
-        id: `oss_${r.id}_${Date.now()}`,
-        tsMs: Date.now(),
-        runId: r.runId,
-        deviceRunId: r.id,
-        path,
-        ok,
-        resultCode: code,
-      })
-      return {
-        ...r,
-        synced: false,
-        syncResult,
-        resultCode: code,
-        syncMessage: ok ? `OSS上传成功，待MQTT上报｜${path}` : `OSS上传失败：${codeToMessage(code)}`,
+
+    const nextRows: DeviceRun[] = []
+    for (const r of rows) {
+      if (uploaded + failed >= max) {
+        nextRows.push(r)
+        continue
       }
-    })
+      if (r.synced) {
+        nextRows.push(r)
+        continue
+      }
+      // Already uploaded and waiting MQTT
+      if (r.picUrl) {
+        nextRows.push({ ...r, syncMessage: r.syncMessage || 'OSS已上传，待MQTT上报' })
+        continue
+      }
+
+      try {
+        const taskId = String((r as any).taskId || '')
+        const cameraId = String((r as any).cameraId || '')
+        if (!taskId || !cameraId) throw new Error('运行数据缺少 taskId/cameraId，无法按协议上报')
+        const upload = await uploadBlobToOss({
+          cfg,
+          mac: boxMac,
+          tsMs: r.capturedAtMs || now,
+          taskId,
+          runId: r.runId,
+          cameraId,
+          snapshotUrl: r.snapshotUrl,
+        })
+
+        uploaded += 1
+        addCloudLog(CLOUD_OSS_UPLOAD_LOG_KEY, {
+          id: `oss_${r.id}_${Date.now()}`,
+          tsMs: Date.now(),
+          runId: r.runId,
+          deviceRunId: r.id,
+          ok: true,
+          picUrl: upload.picUrl,
+        })
+
+        nextRows.push({
+          ...r,
+          picUrl: upload.picUrl,
+          synced: false,
+          syncResult: '成功' as SyncResult,
+          resultCode: 0 as ResultCode,
+          syncMessage: `OSS上传成功，待MQTT上报｜${upload.picUrl}`,
+        })
+      } catch (e) {
+        failed += 1
+        const msg = e instanceof Error ? e.message : String(e)
+        addCloudLog(CLOUD_OSS_UPLOAD_LOG_KEY, {
+          id: `oss_${r.id}_${Date.now()}`,
+          tsMs: Date.now(),
+          runId: r.runId,
+          deviceRunId: r.id,
+          ok: false,
+          error: msg,
+        })
+        nextRows.push({
+          ...r,
+          picUrl: undefined,
+          synced: false,
+          syncResult: '失败' as SyncResult,
+          resultCode: 999 as ResultCode,
+          syncMessage: `OSS上传失败：${msg}`,
+        })
+      }
+    }
     deviceStore[runId] = nextRows
   }
 
@@ -308,9 +488,12 @@ export function syncImagesToCloud(params: { maxCount?: number }) {
   return { ok: true as const, uploaded, failed }
 }
 
-export function reportResultsToCloud(params: { maxCount?: number }) {
-  const { mqttReady } = cloudStatus()
+export async function reportResultsToCloud(params: { maxCount?: number }) {
+  const cloud = loadCloud()
+  const { mqttReady, boxMacReady, boxMac } = cloudStatus()
   if (!mqttReady) return { ok: false as const, message: 'MQTT未配置或未启用' }
+  if (!boxMacReady) return { ok: false as const, message: 'Box MAC未设置' }
+  if (!cloud) return { ok: false as const, message: '云配置异常' }
 
   const deviceStore = loadJson<Record<string, DeviceRun[]>>(DEVICE_RUNS_KEY, {})
   const max = params.maxCount ?? 100
@@ -318,43 +501,113 @@ export function reportResultsToCloud(params: { maxCount?: number }) {
   let reported = 0
   let failed = 0
   const now = Date.now()
-  const topic = loadCloud()?.mqtt?.topic || 'edge/ybox/telemetry'
+  const cfg: CloudMqttConfig = {
+    host: cloud.mqtt.host,
+    port: cloud.mqtt.port,
+    username: cloud.mqtt.username,
+    clientId: cloud.mqtt.clientId,
+    password: cloud.mqtt.password,
+    wsPath: cloud.mqtt.wsPath,
+  }
 
+  // Collect pending items up to `maxCount`
+  const pending: DeviceRun[] = []
   for (const runId of Object.keys(deviceStore)) {
-    if (reported + failed >= max) break
     const rows = deviceStore[runId]
     if (!Array.isArray(rows) || !rows.length) continue
-    const nextRows: DeviceRun[] = rows.map((r) => {
-      if (reported + failed >= max) return r
-      if (!String(r.syncMessage || '').includes('待MQTT上报')) return r
-      if (reportedIds.has(r.id))
-        return { ...r, synced: true, syncResult: '成功' as SyncResult, resultCode: 0 as ResultCode, syncMessage: 'MQTT结果上报成功' }
-      const ok = Math.random() > 0.12
-      const code: ResultCode = ok ? 0 : Math.random() < 0.35 ? 200 : Math.random() < 0.7 ? 300 : 999
-      addCloudLog(CLOUD_RESULT_REPORT_LOG_KEY, {
-        id: `report_${r.id}_${Date.now()}`,
-        tsMs: Date.now(),
-        topic,
-        runId,
-        deviceRunId: r.id,
-        ok,
-        resultCode: code,
-      })
+    for (const r of rows) {
+      if (pending.length >= max) break
+      if (r.synced) continue
+      if (!r.picUrl) continue
+      if (!String(r.syncMessage || '').includes('待MQTT上报')) continue
+      const taskId = String((r as any).taskId || '')
+      const cameraId = String((r as any).cameraId || '')
+      if (!taskId || !cameraId) continue
+      if (reportedIds.has(r.id)) continue
+      pending.push(r)
+    }
+    if (pending.length >= max) break
+  }
+
+  if (!pending.length) {
+    return { ok: true as const, reported: 0, failed: 0 }
+  }
+
+  const listPayload = pending.map((r) => ({
+    id: r.taskId,
+    cammerId: r.cameraId, // protocol typo kept for compatibility
+    cameraId: r.cameraId,
+    picUrl: r.picUrl,
+    time: r.capturedAtMs,
+    resultCode: r.resultCode,
+    resultMsg: r.status === '成功' ? '' : r.error || '失败',
+  }))
+
+  try {
+    const res = await mqttRequestJson({
+      cfg,
+      mac: boxMac,
+      requestTopic: `edge2cloud/task/v1/upload-screenshot/${boxMac}`,
+      replyTopic: `cloud2edge/task/v1/upload-screenshot/${boxMac}`,
+      data: listPayload,
+      timeoutMs: 15_000,
+    })
+
+    const code = (res as any)?.code
+    const ok = code === undefined ? true : code === 0
+
+    for (const r of pending) {
       if (ok) {
         reported += 1
         reportedIds.add(r.id)
-        return { ...r, synced: true, syncResult: '成功' as SyncResult, resultCode: 0 as ResultCode, syncMessage: 'MQTT结果上报成功' }
+        deviceStore[r.runId] = (deviceStore[r.runId] || []).map((x) =>
+          x.id === r.id
+            ? { ...x, synced: true, syncResult: '成功' as SyncResult, resultCode: 0 as ResultCode, syncMessage: 'MQTT结果上报成功' }
+            : x
+        )
+      } else {
+        failed += 1
+        deviceStore[r.runId] = (deviceStore[r.runId] || []).map((x) =>
+          x.id === r.id
+            ? {
+                ...x,
+                synced: false,
+                syncResult: '失败' as SyncResult,
+                resultCode: 999 as ResultCode,
+                syncMessage: `MQTT结果上报失败：${(res as any)?.msg || 'code=' + code}`,
+              }
+            : x
+        )
       }
-      failed += 1
-      return {
-        ...r,
-        synced: false,
-        syncResult: '失败' as SyncResult,
-        resultCode: code,
-        syncMessage: `MQTT结果上报失败：${codeToMessage(code)}`,
-      }
-    })
-    deviceStore[runId] = nextRows
+
+      addCloudLog(CLOUD_RESULT_REPORT_LOG_KEY, {
+        id: `report_${r.id}_${Date.now()}`,
+        tsMs: Date.now(),
+        runId: r.runId,
+        deviceRunId: r.id,
+        ok,
+        code,
+        picUrl: r.picUrl,
+      })
+    }
+  } catch (e) {
+    failed += pending.length
+    const msg = e instanceof Error ? e.message : String(e)
+    for (const r of pending) {
+      deviceStore[r.runId] = (deviceStore[r.runId] || []).map((x) =>
+        x.id === r.id
+          ? { ...x, synced: false, syncResult: '失败' as SyncResult, resultCode: 999 as ResultCode, syncMessage: `MQTT结果上报失败：${msg}` }
+          : x
+      )
+      addCloudLog(CLOUD_RESULT_REPORT_LOG_KEY, {
+        id: `report_${r.id}_${Date.now()}`,
+        tsMs: Date.now(),
+        runId: r.runId,
+        deviceRunId: r.id,
+        ok: false,
+        error: msg,
+      })
+    }
   }
 
   saveJson(DEVICE_RUNS_KEY, deviceStore)
@@ -369,7 +622,7 @@ export function reportResultsToCloud(params: { maxCount?: number }) {
     operator: 'admin',
     ip: '127.0.0.1',
     requestId: `mqtt_report_${now}`,
-    detail: { reported, failed, topic },
+    detail: { reported, failed, pendingCount: pending.length },
   })
   return { ok: true as const, reported, failed }
 }

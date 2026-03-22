@@ -3,6 +3,7 @@ import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { appendManualLog } from '@/utils/logsMock'
 import { formatDateTime } from '@/stores/app'
+import { useAuthStore } from '@/stores/auth'
 import type { Camera } from '@/components/devices/CameraFormDialog.vue'
 import NvrFormDialog from '@/components/devices/nvrs/NvrFormDialog.vue'
 import NvrChannelsDialog from '@/components/devices/nvrs/NvrChannelsDialog.vue'
@@ -14,6 +15,11 @@ type FilterModel = {
   protocol: '' | 'RTSP' | 'ONVIF' | 'HTTP' | 'GB28181'
   status: '' | NvrStatus
 }
+
+const auth = useAuthStore()
+const canCreateNvr = computed(() => auth.hasPermission('devices.nvrs.create'))
+const canEditNvr = computed(() => auth.hasPermission('devices.nvrs.edit'))
+const canDeleteNvr = computed(() => auth.hasPermission('devices.nvrs.delete'))
 
 const NVRS_KEY = 'edge_nvrs_v1'
 const CAMERAS_KEY = 'edge_cameras_v1'
@@ -387,7 +393,7 @@ function getStatus(nvr: Nvr) {
         <div class="mt-1 text-xs text-zinc-500">维护NVR并同步通道到摄像头列表（演示）。</div>
       </div>
       <div class="flex items-center gap-2">
-        <el-button type="primary" @click="openCreate">新增NVR</el-button>
+        <el-button v-if="canCreateNvr" type="primary" @click="openCreate">新增NVR</el-button>
       </div>
     </div>
 
@@ -434,15 +440,17 @@ function getStatus(nvr: Nvr) {
         </el-table-column>
         <el-table-column label="操作" width="280" fixed="right">
           <template #default="scope">
-            <div class="flex items-center gap-2">
-              <el-button link type="primary" size="small" @click="openEdit(scope.row)">编辑</el-button>
-              <el-button link type="primary" size="small" @click="openChannels(scope.row)">通道管理</el-button>
-              <el-dropdown trigger="click">
+            <div class="flex flex-wrap items-center gap-2">
+              <el-button v-if="canEditNvr" link type="primary" size="small" @click="openEdit(scope.row)">编辑</el-button>
+              <el-button v-if="canEditNvr" link type="primary" size="small" @click="openChannels(scope.row)">通道管理</el-button>
+              <el-dropdown v-if="canEditNvr || canDeleteNvr" trigger="click">
                 <el-button link type="primary" size="small">更多</el-button>
                 <template #dropdown>
                   <el-dropdown-menu>
-                    <el-dropdown-item @click="toggleEnabled(scope.row)">{{ scope.row.enabled ? '禁用' : '启用' }}</el-dropdown-item>
-                    <el-dropdown-item @click="removeNvr(scope.row)">删除</el-dropdown-item>
+                    <el-dropdown-item v-if="canEditNvr" @click="toggleEnabled(scope.row)">
+                      {{ scope.row.enabled ? '禁用' : '启用' }}
+                    </el-dropdown-item>
+                    <el-dropdown-item v-if="canDeleteNvr" @click="removeNvr(scope.row)">删除</el-dropdown-item>
                   </el-dropdown-menu>
                 </template>
               </el-dropdown>

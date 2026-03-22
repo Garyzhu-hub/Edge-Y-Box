@@ -104,12 +104,12 @@ export const navItems: NavItem[] = [
   },
   {
     key: 'algo',
-    label: '算法与布点',
+    label: '算法管理',
     icon: markRaw(Cpu),
     children: [
       {
         key: 'algorithms',
-        label: '算法管理',
+        label: '算法列表',
         to: '/algorithms',
         icon: markRaw(Cpu),
         permission: 'algorithms.view',
@@ -176,13 +176,6 @@ export const navItems: NavItem[] = [
         to: '/system/roles',
         icon: markRaw(UserRound),
         permission: 'system.roles.view',
-      },
-      {
-        key: 'system.permissions',
-        label: '角色权限',
-        to: '/system/permissions',
-        icon: markRaw(Shield),
-        permission: 'system.permissions.view',
       },
       {
         key: 'system.menus',

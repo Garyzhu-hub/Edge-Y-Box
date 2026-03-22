@@ -3,6 +3,7 @@ import { computed, reactive, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import type { SystemRole, RoleStatus } from '@/utils/rolesMock'
 import { permissionCatalog } from '@/config/permissionCatalog'
+import PermissionTreePicker from '@/components/system/roles/PermissionTreePicker.vue'
 
 type Model = {
   name: string
@@ -45,15 +46,6 @@ watch(
 
 const title = computed(() => (isEdit.value ? '编辑角色' : '新增角色'))
 
-const permissionGroups = computed(() => {
-  const map = new Map<string, { group: string; items: { id: string; label: string }[] }>()
-  for (const p of permissionCatalog) {
-    if (!map.has(p.group)) map.set(p.group, { group: p.group, items: [] })
-    map.get(p.group)!.items.push({ id: p.id, label: p.label })
-  }
-  return Array.from(map.values())
-})
-
 function selectAll() {
   form.permissionIds = permissionCatalog.map((p) => p.id)
 }
@@ -77,7 +69,7 @@ function onSave() {
 </script>
 
 <template>
-  <el-dialog v-model="open" :title="title" width="760" append-to-body>
+  <el-dialog v-model="open" :title="title" width="920" append-to-body destroy-on-close>
     <el-form label-width="92">
       <el-form-item label="角色名称">
         <el-input v-model="form.name" :disabled="isBuiltin" placeholder="例如：巡检督导" />
@@ -105,15 +97,8 @@ function onSave() {
             </div>
           </div>
 
-          <div class="max-h-[360px] overflow-auto rounded-md border border-zinc-200 p-3">
-            <div v-for="g in permissionGroups" :key="g.group" class="mb-3">
-              <div class="mb-2 text-xs font-semibold text-zinc-700">{{ g.group }}</div>
-              <el-checkbox-group v-model="form.permissionIds">
-                <div class="grid grid-cols-1 gap-2 md:grid-cols-2">
-                  <el-checkbox v-for="p in g.items" :key="p.id" :label="p.id">{{ p.label }}</el-checkbox>
-                </div>
-              </el-checkbox-group>
-            </div>
+          <div class="max-h-[min(520px,70vh)] overflow-auto rounded-md border border-zinc-200 p-3">
+            <PermissionTreePicker v-model="form.permissionIds" :disabled="isBuiltin" />
           </div>
         </div>
       </el-form-item>

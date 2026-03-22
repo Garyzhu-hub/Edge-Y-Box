@@ -78,7 +78,8 @@ const secret = computed({
         </el-form-item>
       </div>
       <div class="mt-2 rounded-xl border border-zinc-200 bg-zinc-50 p-3 text-xs text-zinc-600">
-        AccessKeySecret 不回显；仅在你重新输入时更新；为空表示不修改。
+        与任务「图片同步」一致：实际上传凭证由云端经 MQTT（get-oss）下发；下方 Endpoint 等用于备案与后续扩展。AccessKeySecret
+        不回显；仅在你重新输入时更新；为空表示不修改。
       </div>
     </el-form>
   </IntegrationCard>

@@ -77,6 +77,7 @@ declare module 'vue' {
     OnlineOverview: typeof import('./components/dashboard/OnlineOverview.vue')['default']
     OssPanel: typeof import('./components/system/cloud/OssPanel.vue')['default']
     PagePlaceholder: typeof import('./components/common/PagePlaceholder.vue')['default']
+    PermissionTreePicker: typeof import('./components/system/roles/PermissionTreePicker.vue')['default']
     PersonFormDialog: typeof import('./components/system/people/PersonFormDialog.vue')['default']
     PhonePanel: typeof import('./components/system/cloud/PhonePanel.vue')['default']
     QuickActions: typeof import('./components/dashboard/QuickActions.vue')['default']

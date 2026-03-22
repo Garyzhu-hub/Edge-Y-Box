@@ -245,28 +245,33 @@ onBeforeUnmount(() => {
                 <span>CPU</span>
                 <span>{{ cpuPercent }}%</span>
               </div>
-              <el-progress :percentage="cpuPercent" :stroke-width="10" />
+              <el-progress :percentage="cpuPercent" :stroke-width="10" :show-text="false" />
             </div>
             <div>
               <div class="mb-1 flex items-center justify-between text-xs text-zinc-600">
                 <span>GPU</span>
                 <span>{{ gpuPercent }}%</span>
               </div>
-              <el-progress :percentage="gpuPercent" :stroke-width="10" />
+              <el-progress :percentage="gpuPercent" :stroke-width="10" :show-text="false" />
             </div>
             <div>
               <div class="mb-1 flex items-center justify-between text-xs text-zinc-600">
                 <span>内存</span>
                 <span>{{ health.memUsedGb }} / {{ health.memTotalGb }} GB（{{ memPercent }}%）</span>
               </div>
-              <el-progress :percentage="memPercent" :stroke-width="10" status="success" />
+              <el-progress :percentage="memPercent" :stroke-width="10" status="success" :show-text="false" />
             </div>
             <div>
               <div class="mb-1 flex items-center justify-between text-xs text-zinc-600">
                 <span>磁盘</span>
                 <span>{{ totalDisk.usedGb }} / {{ totalDisk.totalGb }} GB（{{ totalDisk.percent }}%）</span>
               </div>
-              <el-progress :percentage="totalDisk.percent" :stroke-width="10" :status="totalDisk.percent > 85 ? 'exception' : 'success'" />
+              <el-progress
+                :percentage="totalDisk.percent"
+                :stroke-width="10"
+                :status="totalDisk.percent > 85 ? 'exception' : 'success'"
+                :show-text="false"
+              />
               <div class="mt-2 grid grid-cols-1 gap-2 md:grid-cols-2">
                 <div v-for="d in health.diskList" :key="d.mount" class="rounded-md border border-zinc-200 p-2">
                   <div class="flex items-center justify-between text-xs">

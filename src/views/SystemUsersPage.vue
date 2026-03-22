@@ -2,6 +2,7 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { formatDateTime } from '@/stores/app'
+import { useAuthStore } from '@/stores/auth'
 import { appendManualLog } from '@/utils/logsMock'
 import UserFormDialog from '@/components/system/users/UserFormDialog.vue'
 import { makeMockUsers, type SystemUser, type SystemUserRole, type UserStatus } from '@/utils/usersMock'
@@ -11,6 +12,11 @@ type FilterModel = {
   role: '' | SystemUserRole
   status: '' | UserStatus
 }
+
+const auth = useAuthStore()
+const canCreate = computed(() => auth.hasPermission('system.users.create'))
+const canEdit = computed(() => auth.hasPermission('system.users.edit'))
+const canDelete = computed(() => auth.hasPermission('system.users.delete'))
 
 const STORAGE_KEY = 'edge_users_v1'
 
@@ -228,26 +234,27 @@ watch([page, pageSize], () => refresh())
       </div>
 
       <div class="flex items-center gap-2">
-        <el-button type="primary" @click="openCreate">新增用户</el-button>
+        <el-button v-if="canCreate" type="primary" @click="openCreate">新增用户</el-button>
       </div>
     </div>
 
     <el-card>
-      <div class="grid grid-cols-1 gap-3 md:grid-cols-6">
-        <el-input v-model="filter.keyword" placeholder="用户名/姓名/ID" clearable />
-        <el-select v-model="filter.role" placeholder="角色" clearable>
-          <el-option label="超级管理员" value="super_admin" />
-          <el-option label="项目人员" value="project_user" />
-        </el-select>
-        <el-select v-model="filter.status" placeholder="状态" clearable>
-          <el-option label="启用" value="启用" />
-          <el-option label="禁用" value="禁用" />
-        </el-select>
-      </div>
-
-      <div class="mt-3 flex items-center justify-end gap-2">
-        <el-button @click="onReset">重置</el-button>
-        <el-button type="primary" :loading="loading" @click="onSearch">搜索</el-button>
+      <div class="flex flex-col gap-3 min-[900px]:flex-row min-[900px]:flex-wrap min-[900px]:items-center">
+        <div class="grid min-w-0 flex-1 grid-cols-1 gap-3 sm:grid-cols-3">
+          <el-input v-model="filter.keyword" placeholder="用户名/姓名/ID" clearable />
+          <el-select v-model="filter.role" placeholder="角色" clearable>
+            <el-option label="超级管理员" value="super_admin" />
+            <el-option label="项目人员" value="project_user" />
+          </el-select>
+          <el-select v-model="filter.status" placeholder="状态" clearable>
+            <el-option label="启用" value="启用" />
+            <el-option label="禁用" value="禁用" />
+          </el-select>
+        </div>
+        <div class="flex shrink-0 items-center justify-end gap-2 min-[900px]:pl-2">
+          <el-button @click="onReset">重置</el-button>
+          <el-button type="primary" :loading="loading" @click="onSearch">搜索</el-button>
+        </div>
       </div>
     </el-card>
 
@@ -278,16 +285,24 @@ watch([page, pageSize], () => refresh())
         <el-table-column label="操作" width="240" fixed="right">
           <template #default="scope">
             <div class="flex items-center gap-2">
-              <el-button link type="primary" size="small" @click="openEdit(scope.row)">编辑</el-button>
-              <el-button link type="primary" size="small" @click="resetPassword(scope.row)">重置口令</el-button>
-              <el-dropdown trigger="click">
+              <el-button v-if="canEdit" link type="primary" size="small" @click="openEdit(scope.row)">编辑</el-button>
+              <el-button v-if="canEdit" link type="primary" size="small" @click="resetPassword(scope.row)">重置口令</el-button>
+              <el-dropdown v-if="canEdit || canDelete" trigger="click">
                 <el-button link type="primary" size="small">更多</el-button>
                 <template #dropdown>
                   <el-dropdown-menu>
-                    <el-dropdown-item :disabled="scope.row.username === 'admin'" @click="toggleStatus(scope.row)">
+                    <el-dropdown-item
+                      v-if="canEdit"
+                      :disabled="scope.row.username === 'admin'"
+                      @click="toggleStatus(scope.row)"
+                    >
                       {{ scope.row.status === '启用' ? '禁用' : '启用' }}
                     </el-dropdown-item>
-                    <el-dropdown-item :disabled="scope.row.username === 'admin'" @click="removeUser(scope.row)">
+                    <el-dropdown-item
+                      v-if="canDelete"
+                      :disabled="scope.row.username === 'admin'"
+                      @click="removeUser(scope.row)"
+                    >
                       删除
                     </el-dropdown-item>
                   </el-dropdown-menu>

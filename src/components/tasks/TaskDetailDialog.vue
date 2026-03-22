@@ -56,9 +56,6 @@ const latest = computed(() => props.runs[0] || null)
           <span class="text-sm font-semibold">{{ task.name }}</span>
           <span class="font-mono text-xs text-zinc-500">{{ task.id }}</span>
           <el-tag :type="task.status === '已启用' ? 'success' : 'info'" size="small">{{ task.status }}</el-tag>
-          <el-tag :type="task.syncStatus === '已同步' ? 'success' : task.syncStatus === '待同步' ? 'warning' : 'danger'" size="small">
-            {{ task.syncStatus }}
-          </el-tag>
         </div>
         <div class="mt-2 grid grid-cols-1 gap-3 md:grid-cols-4">
           <div class="rounded-lg border border-zinc-200 bg-white p-3">
@@ -140,7 +137,7 @@ const latest = computed(() => props.runs[0] || null)
         <el-tab-pane label="配置">
           <div class="grid grid-cols-1 gap-3 md:grid-cols-2">
             <div class="rounded-xl border border-zinc-200 bg-zinc-50 p-3">
-              <div class="text-xs text-zinc-500">同步方式</div>
+              <div class="text-xs text-zinc-500">任务来源</div>
               <div class="mt-1 text-sm font-semibold">{{ task.syncMode }}</div>
             </div>
             <div class="rounded-xl border border-zinc-200 bg-zinc-50 p-3">

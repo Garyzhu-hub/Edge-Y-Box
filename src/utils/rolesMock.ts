@@ -1,4 +1,4 @@
-import { permissionCatalog } from '@/config/permissionCatalog'
+import { defaultProjectUserPermissionIds, permissionCatalog } from '@/config/permissionCatalog'
 
 export type RoleStatus = '启用' | '禁用'
 
@@ -40,7 +40,7 @@ export function makeDefaultRoles(nowMs = Date.now()): SystemRole[] {
       name: '项目人员',
       description: '系统内置角色（演示），具备日常查看权限。',
       status: '启用',
-      permissionIds: all.filter((x) => !x.startsWith('system.')),
+      permissionIds: defaultProjectUserPermissionIds(),
       createdAtMs: nowMs - 28 * 24 * 60 * 60 * 1000,
       updatedAtMs: nowMs - 3 * 24 * 60 * 60 * 1000,
     },

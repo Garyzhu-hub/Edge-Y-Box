@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
+import { defaultProjectUserPermissionIds } from '@/config/permissionCatalog'
 import type { SystemRole } from '@/utils/rolesMock'
 
 export type UserRole = 'super_admin' | 'project_user'
@@ -38,24 +39,7 @@ export const useAuthStore = defineStore('auth', () => {
     const configured = projectRole?.permissionIds ? normalizePermissions(projectRole.permissionIds) : []
     if (configured.length) return configured
 
-    return [
-      'dashboard.view',
-      'alarms.records.view',
-      'alarms.settings.view',
-      'workOrders.view',
-      'devices.cameras.view',
-      'devices.nvrs.view',
-      'devices.gbCascade.view',
-      'tasks.view',
-      'tasks.create',
-      'algorithms.view',
-      'deployments.view',
-      'logs.operation.view',
-      'logs.system.view',
-      'logs.security.view',
-      'logs.communication.view',
-      'system.cloud.view',
-    ]
+    return defaultProjectUserPermissionIds()
   })
 
   function hasPermission(permissionId: string) {

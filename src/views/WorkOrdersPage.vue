@@ -1,6 +1,8 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAppStore, formatDateTime } from '@/stores/app'
+import { useAuthStore } from '@/stores/auth'
 import WorkOrderStatusTag, { type WorkOrderStatus } from '@/components/workOrders/WorkOrderStatusTag.vue'
 import { ElMessage } from 'element-plus'
 import {
@@ -43,6 +45,8 @@ type FilterModel = {
 
 const route = useRoute()
 const router = useRouter()
+const auth = useAuthStore()
+const canEditWorkOrder = computed(() => auth.hasPermission('workOrders.edit'))
 const app = useAppStore()
 
 const filter = reactive<FilterModel>({
@@ -296,7 +300,7 @@ onMounted(() => {
     </div>
 
     <div class="flex justify-end">
-      <el-button @click="runPatrol">模拟巡检</el-button>
+      <el-button v-if="canEditWorkOrder" @click="runPatrol">模拟巡检</el-button>
     </div>
 
     <el-card>
@@ -402,7 +406,7 @@ onMounted(() => {
                 详情
               </el-button>
 
-              <el-dropdown trigger="click">
+              <el-dropdown v-if="canEditWorkOrder" trigger="click">
                 <el-button link type="primary" size="small">更多</el-button>
                 <template #dropdown>
                   <el-dropdown-menu>

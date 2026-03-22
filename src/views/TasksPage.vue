@@ -11,7 +11,6 @@ import {
   cloudStatus,
   loadDeviceRuns,
   loadTaskRuns,
-  publishTaskToCloud,
   persistDeviceRuns,
   persistTaskRuns,
   reportResultsToCloud,
@@ -26,16 +25,12 @@ import {
   type RunStatus,
   type SnapshotTask,
   type SnapshotTaskStatus,
-  type SyncStatus,
-  type TaskSyncMode,
   type TaskRun,
 } from '@/utils/tasksMock'
 
 type FilterModel = {
   keyword: string
   status: '' | SnapshotTaskStatus
-  syncStatus: '' | SyncStatus
-  syncMode: '' | TaskSyncMode
   lastRunStatus: '' | RunStatus
   range: [Date, Date] | null
 }
@@ -45,8 +40,6 @@ const app = useAppStore()
 const filter = reactive<FilterModel>({
   keyword: '',
   status: '',
-  syncStatus: '',
-  syncMode: '',
   lastRunStatus: '',
   range: null,
 })
@@ -136,6 +129,9 @@ function normalizeTask(t: SnapshotTask): SnapshotTask {
 
 const auth = useAuthStore()
 const canCreateLocal = computed(() => auth.hasPermission('tasks.create'))
+const canEditTask = computed(() => auth.hasPermission('tasks.edit'))
+const canDeleteTask = computed(() => auth.hasPermission('tasks.delete'))
+const canCloudIntegrationsEdit = computed(() => auth.hasPermission('system.cloud.edit'))
 
 const syncingTasks = ref(false)
 const syncingImages = ref(false)
@@ -159,7 +155,7 @@ async function syncTasks() {
   setSyncStage('pulling', '正在从 MQTT 入站队列拉取任务...')
   try {
     await new Promise((r) => setTimeout(r, 420))
-    const r = syncTasksFromCloud({ count: 6 })
+    const r = await syncTasksFromCloud({ count: 6 })
     if (!r.ok) {
       setSyncStage('failed', '', r.message)
       ElMessage.error(r.message)
@@ -185,14 +181,14 @@ async function syncImages() {
   setSyncStage('pulling', '开始执行 OSS 上传与 MQTT 结果上报...')
   try {
     await new Promise((r) => setTimeout(r, 520))
-    const upload = syncImagesToCloud({ maxCount: 80 })
+    const upload = await syncImagesToCloud({ maxCount: 80 })
     if (!upload.ok) {
       setSyncStage('failed', '', upload.message)
       ElMessage.error(upload.message)
       return
     }
     setSyncStage('writing', `上传阶段完成：成功${upload.uploaded}，失败${upload.failed}；准备上报结果...`)
-    const report = reportResultsToCloud({ maxCount: 120 })
+    const report = await reportResultsToCloud({ maxCount: 120 })
     if (!report.ok) {
       setSyncStage('failed', '', report.message)
       ElMessage.error(report.message)
@@ -208,6 +204,11 @@ async function syncImages() {
 
 function ensureMockDataInRange() {
   if (!filter.range) return
+
+  // If MQTT is configured, we should avoid generating mock tasks
+  // because it would overwrite the real data pulled from cloud.
+  const { mqttReady } = cloudStatus()
+  if (mqttReady) return
 
   if (!fullData.value.length) {
     const stored = loadTasks().map((t) => normalizeTask(t))
@@ -235,8 +236,6 @@ function applyFilter(data: SnapshotTask[]) {
   return data
     .filter((t) => (kw ? t.id.includes(kw) || t.name.includes(kw) : true))
     .filter((t) => (filter.status ? t.status === filter.status : true))
-    .filter((t) => (filter.syncStatus ? t.syncStatus === filter.syncStatus : true))
-    .filter((t) => (filter.syncMode ? t.syncMode === filter.syncMode : true))
     .filter((t) => (filter.lastRunStatus ? t.lastRunStatus === filter.lastRunStatus : true))
     .sort((a, b) => b.updatedAtMs - a.updatedAtMs)
 }
@@ -269,8 +268,6 @@ function onSearch() {
 function onReset() {
   filter.keyword = ''
   filter.status = ''
-  filter.syncStatus = ''
-  filter.syncMode = ''
   filter.lastRunStatus = ''
   followGlobalRange.value = true
   setRangeFromGlobal()
@@ -357,57 +354,6 @@ async function removeTask(t: SnapshotTask) {
   refresh()
 }
 
-async function syncTask(t: SnapshotTask) {
-  const confirmed1 = await ElMessageBox.confirm(
-    `同步会将任务下发到边缘节点并覆盖同名配置，是否继续？`,
-    '同步任务（1/2）',
-    {
-      type: 'warning',
-      confirmButtonText: '继续',
-      cancelButtonText: '取消',
-    }
-  )
-    .then(() => true)
-    .catch(() => false)
-  if (!confirmed1) return
-
-  const { value, action } = await ElMessageBox.prompt(
-    `请输入任务ID（${t.id}）以确认同步：`,
-    '同步任务（2/2）',
-    {
-      confirmButtonText: '确认同步',
-      cancelButtonText: '取消',
-      inputPlaceholder: t.id,
-    }
-  ).catch(() => ({ value: '', action: 'cancel' as const }))
-
-  if (action !== 'confirm') return
-  if (String(value).trim() !== t.id) {
-    ElMessage.error('任务ID不匹配，已取消同步')
-    return
-  }
-
-  const idx = fullData.value.findIndex((x) => x.id === t.id)
-  if (idx < 0) return
-  await new Promise((r) => setTimeout(r, 450))
-  setSyncStage('pulling', `正在同步任务 ${t.id} ...`)
-  const pushed = publishTaskToCloud(fullData.value[idx])
-  fullData.value[idx] = {
-    ...fullData.value[idx],
-    syncStatus: pushed.ok ? '已同步' : '同步失败',
-    updatedAtMs: Date.now(),
-  }
-  saveTasks(fullData.value)
-  if (pushed.ok) {
-    setSyncStage('done', `任务 ${t.id} 已下发`)
-    ElMessage.success('同步已提交：MQTT任务下发成功')
-  } else {
-    setSyncStage('failed', '', `任务 ${t.id} 同步失败：${pushed.message}`)
-    ElMessage.error(`同步失败：${pushed.message}`)
-  }
-  refresh()
-}
-
 const detailOpen = ref(false)
 const selected = ref<SnapshotTask | null>(null)
 const runs = ref<TaskRun[]>([])
@@ -439,11 +385,31 @@ function openDeviceRun(payload: { run: TaskRun }) {
     deviceOpen.value = true
     return
   }
+
+  // Use selected task's `deviceIds` to generate device runs with stable cameraId,
+  // so MQTT result upload can include correct `cameraId`.
+  let cameras: { id: string; name?: string; ip?: string }[] = []
+  try {
+    const raw = window.localStorage.getItem('edge_cameras_v1')
+    const parsed = raw ? JSON.parse(raw) : []
+    if (Array.isArray(parsed)) cameras = parsed
+  } catch {
+    // ignore; fall back to generated camera ids
+  }
+
+  const cameraRefs = (selected.value.deviceIds || [])
+    .map((id) => {
+      const c = cameras.find((x) => x.id === id)
+      return { id, label: c?.name || id, ip: c?.ip || '-' }
+    })
+    .filter(Boolean)
+
   const gen = makeMockDeviceRuns({
     taskId: selected.value.id,
     runId: payload.run.id,
     startedAtMs: payload.run.startedAtMs,
     deviceCount: selected.value.deviceCount,
+    cameraRefs,
   })
   deviceRows.value = gen
   persistDeviceRuns(payload.run.id, gen)
@@ -456,30 +422,21 @@ function openDeviceRun(payload: { run: TaskRun }) {
     <div class="flex flex-wrap items-end justify-between gap-3">
       <div>
         <div class="text-base font-semibold">任务管理（抓图任务）</div>
-        <div class="mt-1 text-xs text-zinc-500">支持筛选、同步二次确认与执行记录（演示）。</div>
+        <div class="mt-1 text-xs text-zinc-500">本机即边缘节点：任务在本地维护；支持筛选与执行记录（演示）。云端拉取与图片上报见顶部按钮。</div>
       </div>
       <div class="flex items-center gap-2">
-        <el-button :loading="syncingTasks" @click="syncTasks">同步任务</el-button>
-        <el-button :loading="syncingImages" @click="syncImages">图片同步</el-button>
+        <el-button v-if="canCloudIntegrationsEdit" :loading="syncingTasks" @click="syncTasks">同步任务</el-button>
+        <el-button v-if="canCloudIntegrationsEdit" :loading="syncingImages" @click="syncImages">图片同步</el-button>
         <el-button type="primary" :disabled="!canCreateLocal" @click="openCreate">新增任务</el-button>
       </div>
     </div>
 
     <el-card>
-      <div class="grid grid-cols-1 gap-3 md:grid-cols-7">
+      <div class="grid grid-cols-1 gap-3 md:grid-cols-5">
         <el-input v-model="filter.keyword" placeholder="任务名称/ID" clearable />
         <el-select v-model="filter.status" placeholder="任务状态" clearable>
           <el-option label="已启用" value="已启用" />
           <el-option label="已停用" value="已停用" />
-        </el-select>
-        <el-select v-model="filter.syncStatus" placeholder="同步状态" clearable>
-          <el-option label="已同步" value="已同步" />
-          <el-option label="待同步" value="待同步" />
-          <el-option label="同步失败" value="同步失败" />
-        </el-select>
-        <el-select v-model="filter.syncMode" placeholder="同步方式" clearable>
-          <el-option label="自动同步" value="自动同步" />
-          <el-option label="本地创建" value="本地创建" />
         </el-select>
         <el-select v-model="filter.lastRunStatus" placeholder="最近结果" clearable>
           <el-option label="成功" value="成功" />
@@ -532,7 +489,6 @@ function openDeviceRun(payload: { run: TaskRun }) {
             <span class="font-mono text-xs">{{ scope.row.deviceCount }}</span>
           </template>
         </el-table-column>
-        <el-table-column prop="syncMode" label="同步方式" width="100" />
         <el-table-column label="周期" width="110">
           <template #default="scope">
             <span class="text-xs">每 {{ scope.row.intervalMin }} 分钟</span>
@@ -541,16 +497,6 @@ function openDeviceRun(payload: { run: TaskRun }) {
         <el-table-column label="状态" width="90">
           <template #default="scope">
             <el-tag :type="scope.row.status === '已启用' ? 'success' : 'info'" size="small">{{ scope.row.status }}</el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column label="同步" width="90">
-          <template #default="scope">
-            <el-tag
-              :type="scope.row.syncStatus === '已同步' ? 'success' : scope.row.syncStatus === '待同步' ? 'warning' : 'danger'"
-              size="small"
-            >
-              {{ scope.row.syncStatus }}
-            </el-tag>
           </template>
         </el-table-column>
         <el-table-column label="最近执行" width="160">
@@ -563,29 +509,12 @@ function openDeviceRun(payload: { run: TaskRun }) {
             <el-tag :type="tagTypeForRun(scope.row.lastRunStatus)" size="small">{{ scope.row.lastRunStatus }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="220" fixed="right">
+        <el-table-column label="操作" width="210" fixed="right">
           <template #default="scope">
-            <div class="flex items-center gap-2">
+            <div class="flex flex-wrap items-center gap-2">
               <el-button link type="primary" size="small" @click="openDetail(scope.row)">详情</el-button>
-              <el-button link type="primary" size="small" @click="openEdit(scope.row)">编辑</el-button>
-              <el-button link type="primary" size="small" @click="syncTask(scope.row)">同步</el-button>
-              <el-button
-                v-if="scope.row.syncStatus === '同步失败'"
-                link
-                type="danger"
-                size="small"
-                @click="syncTask(scope.row)"
-              >
-                重试同步
-              </el-button>
-              <el-dropdown trigger="click">
-                <el-button link type="primary" size="small">更多</el-button>
-                <template #dropdown>
-                  <el-dropdown-menu>
-                    <el-dropdown-item @click="removeTask(scope.row)">删除</el-dropdown-item>
-                  </el-dropdown-menu>
-                </template>
-              </el-dropdown>
+              <el-button v-if="canEditTask" link type="primary" size="small" @click="openEdit(scope.row)">编辑</el-button>
+              <el-button v-if="canDeleteTask" link type="danger" size="small" @click="removeTask(scope.row)">删除</el-button>
             </div>
           </template>
         </el-table-column>

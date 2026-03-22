@@ -1,6 +1,8 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { formatDateTime } from '@/stores/app'
+import { useAuthStore } from '@/stores/auth'
 import { appendManualLog } from '@/utils/logsMock'
 import AlgorithmFormDialog from '@/components/algorithms/AlgorithmFormDialog.vue'
 import VersionManagerDialog from '@/components/algorithms/VersionManagerDialog.vue'
@@ -14,6 +16,11 @@ import {
   type AlgorithmStatus,
   type AlgorithmVersion,
 } from '@/utils/algorithmsMock'
+
+const auth = useAuthStore()
+const canCreateAlgorithm = computed(() => auth.hasPermission('algorithms.create'))
+const canEditAlgorithm = computed(() => auth.hasPermission('algorithms.edit'))
+const canDeleteAlgorithm = computed(() => auth.hasPermission('algorithms.delete'))
 
 const STORAGE_KEY = 'edge_algorithms_v1'
 const DOWNLOAD_KEY = 'edge_algorithm_downloads_v1'
@@ -636,11 +643,11 @@ onBeforeUnmount(() => {
         <div class="text-base font-semibold">算法管理</div>
         <div class="mt-1 text-xs text-zinc-500">支持远程下载、导入导出、版本回滚与启停（演示）。</div>
       </div>
-      <div class="flex items-center gap-2">
-        <el-button @click="openImport">导入</el-button>
-        <el-button @click="openExport">导出</el-button>
-        <el-button @click="openDownload">远程下载</el-button>
-        <el-button type="primary" @click="openCreate">新增算法</el-button>
+      <div class="flex flex-wrap items-center gap-2">
+        <el-button v-if="canEditAlgorithm" @click="openImport">导入</el-button>
+        <el-button v-if="canEditAlgorithm" @click="openExport">导出</el-button>
+        <el-button v-if="canEditAlgorithm" @click="openDownload">远程下载</el-button>
+        <el-button v-if="canCreateAlgorithm" type="primary" @click="openCreate">新增算法</el-button>
       </div>
     </div>
 
@@ -689,17 +696,19 @@ onBeforeUnmount(() => {
         </el-table-column>
         <el-table-column label="操作" width="220" fixed="right">
           <template #default="scope">
-            <div class="flex items-center gap-2">
-              <el-button link type="primary" size="small" @click="toggleEnable(scope.row)">
+            <div class="flex flex-wrap items-center gap-2">
+              <el-button v-if="canEditAlgorithm" link type="primary" size="small" @click="toggleEnable(scope.row)">
                 {{ scope.row.status === '已启用' ? '停用' : '启用' }}
               </el-button>
-              <el-button link type="primary" size="small" @click="openVersions(scope.row)">版本管理</el-button>
-              <el-dropdown trigger="click">
+              <el-button v-if="canEditAlgorithm" link type="primary" size="small" @click="openVersions(scope.row)">
+                版本管理
+              </el-button>
+              <el-dropdown v-if="canEditAlgorithm || canDeleteAlgorithm" trigger="click">
                 <el-button link type="primary" size="small">更多</el-button>
                 <template #dropdown>
                   <el-dropdown-menu>
-                    <el-dropdown-item @click="openEdit(scope.row)">编辑</el-dropdown-item>
-                    <el-dropdown-item @click="removeAlgorithm(scope.row)">删除</el-dropdown-item>
+                    <el-dropdown-item v-if="canEditAlgorithm" @click="openEdit(scope.row)">编辑</el-dropdown-item>
+                    <el-dropdown-item v-if="canDeleteAlgorithm" @click="removeAlgorithm(scope.row)">删除</el-dropdown-item>
                   </el-dropdown-menu>
                 </template>
               </el-dropdown>

@@ -74,13 +74,18 @@ export type TaskRun = {
 }
 
 export type DeviceRun = {
+  taskId: string
   id: string
   runId: string
   deviceLabel: string
   deviceIp: string
+  cameraId: string
   status: RunStatus
   capturedAtMs: number
   snapshotUrl: string
+  // When syncing to cloud, we may upload the snapshot image to OSS and receive a public/authorized URL.
+  // It is required for MQTT result upload payload.
+  picUrl?: string
   error: string
   synced: boolean
   syncResult: SyncResult
@@ -219,14 +224,32 @@ export function makeMockRuns(params: { taskId: string; fromMs: number; toMs: num
   return list.sort((a, b) => b.startedAtMs - a.startedAtMs)
 }
 
-export function makeMockDeviceRuns(params: { taskId: string; runId: string; startedAtMs: number; deviceCount: number }) {
-  const { taskId, runId, startedAtMs, deviceCount } = params
+export type CameraRef = { id: string; label: string; ip: string }
+
+export function makeMockDeviceRuns(params: {
+  taskId: string
+  runId: string
+  startedAtMs: number
+  deviceCount: number
+  cameraRefs?: CameraRef[]
+}) {
+  const { taskId, runId, startedAtMs, deviceCount, cameraRefs } = params
   const rand = mulberry32(seedFromText(`${taskId}-${runId}`))
   const devices = ['北门出入口-3', '东门岗亭-1', '景观广场-1', '1号楼大堂-2', '地库B2-5']
+  const cameraPool: CameraRef[] =
+    cameraRefs && cameraRefs.length
+      ? cameraRefs
+      : Array.from({ length: Math.max(1, deviceCount) }).map((_, i) => ({
+          id: `${taskId}-cam-${i + 1}`,
+          label: devices[i % devices.length],
+          ip: `192.168.${20 + Math.floor(rand() * 5)}.${10 + Math.floor(rand() * 200)}`,
+        }))
 
   return Array.from({ length: deviceCount }).map((_, i): DeviceRun => {
-    const deviceLabel = `${devices[Math.floor(rand() * devices.length)]}-${i + 1}`
-    const deviceIp = `192.168.${20 + Math.floor(rand() * 5)}.${10 + Math.floor(rand() * 200)}`
+    const cam = cameraPool[i % cameraPool.length]
+    const deviceLabel = cam.label
+    const deviceIp = cam.ip
+    const cameraId = cam.id
     const statusRoll = rand()
     const status: RunStatus = statusRoll < 0.83 ? '成功' : '失败'
     const capturedAtMs = startedAtMs + Math.floor(rand() * 30_000)
@@ -255,12 +278,15 @@ export function makeMockDeviceRuns(params: { taskId: string; runId: string; star
 
     return {
       id: `DR-${runId.slice(-4)}-${String(100 + i).padStart(3, '0')}`,
+      taskId,
       runId,
       deviceLabel,
       deviceIp,
+      cameraId,
       status,
       capturedAtMs,
       snapshotUrl,
+      picUrl: undefined,
       error,
       synced,
       syncResult,

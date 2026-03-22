@@ -1,6 +1,10 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import { ElMessage } from 'element-plus'
+import { useAuthStore } from '@/stores/auth'
 import { appendManualLog } from '@/utils/logsMock'
+import { mqttTestConnection, type CloudMqttConfig } from '@/utils/cloud/mqttClient'
+import { getOssPolicy } from '@/utils/taskCloudSync'
 import MqttPanel, { type MqttConfig } from '@/components/system/cloud/MqttPanel.vue'
 import OssPanel, { type OssConfig } from '@/components/system/cloud/OssPanel.vue'
 import SipPanel, { type SipConfig } from '@/components/system/cloud/SipPanel.vue'
@@ -10,6 +14,8 @@ import PhonePanel, { type PhoneConfig } from '@/components/system/cloud/PhonePan
 type Status = '未配置' | '未测试' | '可用' | '失败' | '测试中'
 
 type Persisted = {
+  // Edge-YBox server MAC, required by protocol topic `/.../{mac}`
+  boxMac: string
   mqtt: MqttConfig
   oss: OssConfig
   sip: SipConfig
@@ -17,10 +23,15 @@ type Persisted = {
   phone: PhoneConfig
 }
 
+const auth = useAuthStore()
+const canEdit = computed(() => auth.hasPermission('system.cloud.edit'))
+
 const STORAGE_KEY = 'edge_cloud_integrations_v1'
+type IntegrationSection = Exclude<keyof Persisted, 'boxMac'>
 
 function loadPersisted(): Persisted {
   const fallback: Persisted = {
+    boxMac: '',
     mqtt: {
       enabled: false,
       host: 'mqtt.example.com',
@@ -28,6 +39,8 @@ function loadPersisted(): Persisted {
       username: 'edge-box',
       clientId: 'edge-ybox-01',
       topic: 'edge/ybox/telemetry',
+      password: '',
+      wsPath: '/mqtt',
       secretConfigured: false,
     },
     oss: {
@@ -67,7 +80,7 @@ function loadPersisted(): Persisted {
     const raw = window.localStorage.getItem(STORAGE_KEY)
     if (!raw) return fallback
     const parsed = JSON.parse(raw) as Persisted
-    return { ...fallback, ...parsed }
+    return { ...fallback, ...parsed, boxMac: (parsed as any).boxMac ?? fallback.boxMac }
   } catch {
     return fallback
   }
@@ -113,10 +126,33 @@ function statusType(s: Status) {
   return 'info'
 }
 
-function isConfigured(key: keyof Persisted) {
+function normalizeMac(mac: string) {
+  return mac.trim().toUpperCase()
+}
+
+/** 当前表单可连 MQTT（含未保存到 localStorage 的密码输入框）。 */
+function buildMqttCfgFromForm(): CloudMqttConfig | null {
+  const m = persisted.mqtt
+  const pwd = secrets.mqttPassword.trim() || m.password
+  if (!m.enabled || !m.host || !m.port || !m.username || !m.clientId || !pwd) return null
+  return {
+    host: m.host,
+    port: m.port,
+    username: m.username,
+    clientId: m.clientId,
+    password: pwd,
+    wsPath: m.wsPath,
+  }
+}
+
+/** OSS 测试走 MQTT `get-oss`，需启用 OSS、填写 Box MAC，且 MQTT 表单完整。 */
+function canRunOssMqttTest() {
+  return persisted.oss.enabled && Boolean(persisted.boxMac?.trim()) && buildMqttCfgFromForm() !== null
+}
+
+function isConfigured(key: IntegrationSection) {
   if (key === 'mqtt') {
-    const m = persisted.mqtt
-    return Boolean(m.host) && Boolean(m.port) && Boolean(m.username) && m.secretConfigured
+    return buildMqttCfgFromForm() !== null
   }
   if (key === 'oss') {
     const o = persisted.oss
@@ -134,12 +170,18 @@ function isConfigured(key: keyof Persisted) {
   return Boolean(p.provider) && Boolean(p.endpoint) && p.secretConfigured
 }
 
-async function runTest(key: keyof Persisted, label: string) {
+async function runTest(key: IntegrationSection, label: string) {
   if (!persisted[key].enabled) {
     ElMessage.warning('请先启用后再测试')
     return
   }
-  if (!isConfigured(key)) {
+  if (key === 'oss') {
+    if (!canRunOssMqttTest()) {
+      status.oss = '未配置'
+      ElMessage.warning('OSS 测试需：启用 OSS、填写 Box MAC，并启用且填完整 MQTT（含密码）')
+      return
+    }
+  } else if (!isConfigured(key)) {
     status[key] = '未配置'
     ElMessage.warning('配置不完整或密钥未设置')
     return
@@ -147,6 +189,7 @@ async function runTest(key: keyof Persisted, label: string) {
 
   testing[key] = true
   status[key] = '测试中'
+  const reqId = `cloud_test_${key}_${Date.now()}`
   appendManualLog({
     kind: 'communication',
     tsMs: Date.now(),
@@ -156,34 +199,96 @@ async function runTest(key: keyof Persisted, label: string) {
     summary: `${label} 连接测试开始`,
     operator: 'admin',
     ip: '127.0.0.1',
-    requestId: `cloud_test_${key}_${Date.now()}`,
+    requestId: reqId,
     detail: { section: key, stage: 'start' },
   })
 
   try {
-    await new Promise((r) => setTimeout(r, 600))
-    const ok = Math.random() > 0.18
-    status[key] = ok ? '可用' : '失败'
+    if (key === 'mqtt') {
+      const cfg = buildMqttCfgFromForm()
+      if (!cfg) {
+        status.mqtt = '未配置'
+        ElMessage.warning('请填写 Host、端口、用户名、ClientId，并输入 MQTT 密码')
+        return
+      }
+      await mqttTestConnection(cfg)
+      status.mqtt = '可用'
+      appendManualLog({
+        kind: 'communication',
+        tsMs: Date.now(),
+        level: 'info',
+        module: '云平台对接',
+        action: '测试',
+        summary: `${label} WebSocket 连接成功`,
+        operator: 'admin',
+        ip: '127.0.0.1',
+        requestId: `${reqId}_done`,
+        detail: { section: key, stage: 'done', ok: true },
+      })
+      ElMessage.success('MQTT 连接成功')
+    } else if (key === 'oss') {
+      const cfg = buildMqttCfgFromForm()!
+      const mac = normalizeMac(persisted.boxMac)
+      await getOssPolicy(cfg, mac)
+      status.oss = '可用'
+      appendManualLog({
+        kind: 'communication',
+        tsMs: Date.now(),
+        level: 'info',
+        module: '云平台对接',
+        action: '测试',
+        summary: `${label} MQTT get-oss 鉴权成功`,
+        operator: 'admin',
+        ip: '127.0.0.1',
+        requestId: `${reqId}_done`,
+        detail: { section: key, stage: 'done', ok: true },
+      })
+      ElMessage.success('OSS 鉴权成功（已通过 MQTT 拉取上传策略）')
+    } else {
+      await new Promise((r) => setTimeout(r, 600))
+      const ok = Math.random() > 0.18
+      status[key] = ok ? '可用' : '失败'
+      appendManualLog({
+        kind: 'communication',
+        tsMs: Date.now(),
+        level: ok ? 'info' : 'warn',
+        module: '云平台对接',
+        action: '测试',
+        summary: `${label} 连接测试${ok ? '通过' : '失败'}（演示）`,
+        operator: 'admin',
+        ip: '127.0.0.1',
+        requestId: `${reqId}_done`,
+        detail: { section: key, stage: 'done', ok },
+      })
+      if (ok) ElMessage.success('测试通过（演示）')
+      else ElMessage.error('测试失败（演示）')
+    }
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    status[key] = '失败'
     appendManualLog({
       kind: 'communication',
       tsMs: Date.now(),
-      level: ok ? 'info' : 'warn',
+      level: 'warn',
       module: '云平台对接',
       action: '测试',
-      summary: `${label} 连接测试${ok ? '通过' : '失败'}`,
+      summary: `${label} 连接测试失败：${msg}`,
       operator: 'admin',
       ip: '127.0.0.1',
-      requestId: `cloud_test_${key}_${Date.now()}`,
-      detail: { section: key, stage: 'done', ok },
+      requestId: `${reqId}_err`,
+      detail: { section: key, stage: 'error', error: msg },
     })
-    ElMessage.success(ok ? '测试通过（占位）' : '测试失败（占位）')
+    ElMessage.error(msg)
   } finally {
     testing[key] = false
   }
 }
 
 function applySecretUpdates() {
-  if (secrets.mqttPassword.trim()) persisted.mqtt.secretConfigured = true
+  if (secrets.mqttPassword.trim()) {
+    persisted.mqtt.password = secrets.mqttPassword.trim()
+    persisted.mqtt.secretConfigured = true
+  }
   if (secrets.ossAccessKeySecret.trim()) persisted.oss.secretConfigured = true
   if (secrets.sipPassword.trim()) persisted.sip.secretConfigured = true
   if (secrets.smsApiKey.trim()) persisted.sms.secretConfigured = true
@@ -198,7 +303,7 @@ function clearSecretInputs() {
   secrets.phoneApiKey = ''
 }
 
-function onToggleSection(section: keyof Persisted, enabled: boolean) {
+function onToggleSection(section: IntegrationSection, enabled: boolean) {
   persisted[section].enabled = enabled
   appendManualLog({
     kind: 'operation',
@@ -214,7 +319,7 @@ function onToggleSection(section: keyof Persisted, enabled: boolean) {
   })
 }
 
-function updateSection<K extends keyof Persisted>(section: K, next: Persisted[K]) {
+function updateSection<K extends IntegrationSection>(section: K, next: Persisted[K]) {
   const prevEnabled = persisted[section].enabled
   persisted[section] = next
   if (prevEnabled !== next.enabled) {
@@ -223,7 +328,12 @@ function updateSection<K extends keyof Persisted>(section: K, next: Persisted[K]
 }
 
 function onSave() {
+  if (!canEdit.value) {
+    ElMessage.warning('当前角色无云平台对接编辑权限')
+    return
+  }
   applySecretUpdates()
+  persisted.boxMac = persisted.boxMac.trim().toUpperCase()
   savePersisted(persisted)
   clearSecretInputs()
   appendManualLog({
@@ -232,11 +342,12 @@ function onSave() {
     level: 'info',
     module: '云平台对接',
     action: '保存',
-    summary: '云平台对接配置已保存（占位）',
+    summary: '云平台对接配置已保存',
     operator: 'admin',
     ip: '127.0.0.1',
     requestId: `cloud_save_${Date.now()}`,
     detail: {
+      boxMac: persisted.boxMac,
       mqtt: { enabled: persisted.mqtt.enabled, secretConfigured: persisted.mqtt.secretConfigured },
       oss: { enabled: persisted.oss.enabled, secretConfigured: persisted.oss.secretConfigured },
       sip: { enabled: persisted.sip.enabled, secretConfigured: persisted.sip.secretConfigured },
@@ -244,7 +355,7 @@ function onSave() {
       phone: { enabled: persisted.phone.enabled, secretConfigured: persisted.phone.secretConfigured },
     },
   })
-  ElMessage.success('已保存（占位）')
+  ElMessage.success('已保存')
 }
 </script>
 
@@ -256,8 +367,22 @@ function onSave() {
         <div class="mt-1 text-xs text-zinc-500">MQTT / 对象存储 / SIP / 短信 / 电话对接配置（演示）。</div>
       </div>
       <div class="flex items-center gap-2">
-        <el-button type="primary" @click="onSave">保存配置</el-button>
+        <el-button v-if="canEdit" type="primary" @click="onSave">保存配置</el-button>
       </div>
+    </div>
+
+    <div class="rounded-xl border border-zinc-200 bg-zinc-50 p-3 text-xs text-zinc-700">
+      <div class="flex flex-wrap items-center gap-3">
+        <div class="font-medium text-zinc-900">Edge Box MAC（协议 topic 使用）</div>
+        <el-input
+          v-model="persisted.boxMac"
+          placeholder="例如：C2:52:49:4C:03:2A"
+          style="width: 320px"
+          clearable
+          :disabled="!canEdit"
+        />
+      </div>
+      <div class="mt-1 text-zinc-500">用于协议里的 `{mac}` 主题字段，必须大写。</div>
     </div>
 
     <el-tabs v-model="tab" type="card">

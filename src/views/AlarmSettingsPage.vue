@@ -38,7 +38,7 @@ const PEOPLE_KEY = 'edge_people_v1'
 const auth = useAuthStore()
 auth.loadFromStorage()
 
-const canEdit = computed(() => auth.role === 'super_admin')
+const canEdit = computed(() => auth.role === 'super_admin' || auth.hasPermission('alarms.settings.edit'))
 
 function loadPeopleFromStorage(): Person[] {
   try {

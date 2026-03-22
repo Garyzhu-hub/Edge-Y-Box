@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { onMounted, reactive, ref, watch } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { formatDateTime } from '@/stores/app'
+import { useAuthStore } from '@/stores/auth'
 import { appendManualLog } from '@/utils/logsMock'
 import GbPlatformFormDialog from '@/components/devices/gb/GbPlatformFormDialog.vue'
 import GbChannelsDrawer from '@/components/devices/gb/GbChannelsDrawer.vue'
@@ -15,6 +16,9 @@ type FilterModel = {
   status: '' | GbStatus
   enabled: '' | '启用' | '停用'
 }
+
+const auth = useAuthStore()
+const canEditGb = computed(() => auth.hasPermission('devices.gbCascade.edit'))
 
 const STORAGE_KEY = 'edge_gb_cascade_v1'
 const HISTORY_KEY = 'edge_gb_status_history_v1'
@@ -554,8 +558,8 @@ watch([page, pageSize], () => refresh())
         <div class="mt-1 text-xs text-zinc-500">“刷新通道池”用于从本机摄像头列表刷新可共享通道；“通道共享”用于选择共享给该上级的平台通道。</div>
       </div>
       <div class="flex items-center gap-2">
-        <el-button :loading="syncingAll" @click="syncAll">刷新通道池（全部）</el-button>
-        <el-button type="primary" @click="openCreate">新增上级平台</el-button>
+        <el-button v-if="canEditGb" :loading="syncingAll" @click="syncAll">刷新通道池（全部）</el-button>
+        <el-button v-if="canEditGb" type="primary" @click="openCreate">新增上级平台</el-button>
       </div>
     </div>
 
@@ -621,13 +625,19 @@ watch([page, pageSize], () => refresh())
         </el-table-column>
         <el-table-column label="操作" width="340" fixed="right">
           <template #default="scope">
-            <div class="flex items-center gap-2">
-              <el-button link type="primary" size="small" @click="openEdit(scope.row)">编辑</el-button>
-              <el-button link type="primary" size="small" @click="scope.row.registered ? unregister(scope.row) : register(scope.row)">
+            <div class="flex flex-wrap items-center gap-2">
+              <el-button v-if="canEditGb" link type="primary" size="small" @click="openEdit(scope.row)">编辑</el-button>
+              <el-button
+                v-if="canEditGb"
+                link
+                type="primary"
+                size="small"
+                @click="scope.row.registered ? unregister(scope.row) : register(scope.row)"
+              >
                 {{ scope.row.registered ? '注销' : '注册' }}
               </el-button>
-              <el-button link type="primary" size="small" @click="syncChannels(scope.row)">刷新通道池</el-button>
-              <el-dropdown trigger="click">
+              <el-button v-if="canEditGb" link type="primary" size="small" @click="syncChannels(scope.row)">刷新通道池</el-button>
+              <el-dropdown v-if="canEditGb" trigger="click">
                 <el-button link type="primary" size="small">更多</el-button>
                 <template #dropdown>
                   <el-dropdown-menu>

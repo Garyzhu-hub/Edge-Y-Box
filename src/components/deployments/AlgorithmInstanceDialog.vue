@@ -43,7 +43,7 @@ const form = reactive<FormModel>({
 
 const formRef = ref()
 const saving = ref(false)
-const title = computed(() => (props.initial ? '编辑算法实例' : '新增算法实例'))
+const title = computed(() => (props.initial ? '编辑算法规则' : '新增算法规则'))
 
 const rules = {
   algorithmId: [{ required: true, message: '请选择算法', trigger: 'change' }],
@@ -124,7 +124,7 @@ async function onSave() {
       schedule: props.initial?.schedule ? { ...props.initial.schedule } : defaultInstanceSchedule(),
     })
     open.value = false
-    ElMessage.success('已保存算法实例（占位）')
+    ElMessage.success('已保存算法规则')
   } finally {
     saving.value = false
   }

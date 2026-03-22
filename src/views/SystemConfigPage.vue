@@ -2,6 +2,7 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { formatDateTime } from '@/stores/app'
+import { useAuthStore } from '@/stores/auth'
 import { appendManualLog } from '@/utils/logsMock'
 import ConfigEditDialog from '@/components/system/config/ConfigEditDialog.vue'
 import { makeDefaultConfig, type ConfigItem, type ConfigValueType } from '@/utils/configMock'
@@ -11,6 +12,9 @@ type FilterModel = {
   group: '' | string
   type: '' | ConfigValueType
 }
+
+const auth = useAuthStore()
+const canEdit = computed(() => auth.hasPermission('system.config.edit'))
 
 const STORAGE_KEY = 'edge_config_v1'
 
@@ -206,8 +210,8 @@ watch([page, pageSize], () => refresh())
       </div>
 
       <div class="flex items-center gap-2">
-        <el-button @click="onImport">导入</el-button>
-        <el-button @click="onExport">导出</el-button>
+        <el-button v-if="canEdit" @click="onImport">导入</el-button>
+        <el-button v-if="canEdit" @click="onExport">导出</el-button>
       </div>
     </div>
 
@@ -260,7 +264,7 @@ watch([page, pageSize], () => refresh())
         </el-table-column>
         <el-table-column label="操作" width="120" fixed="right">
           <template #default="scope">
-            <el-button link type="primary" size="small" @click="openEdit(scope.row)">编辑</el-button>
+            <el-button v-if="canEdit" link type="primary" size="small" @click="openEdit(scope.row)">编辑</el-button>
           </template>
         </el-table-column>
       </el-table>

@@ -1,6 +1,8 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { formatDateTime } from '@/stores/app'
+import { useAuthStore } from '@/stores/auth'
 import CameraFormDialog, { type Camera, type CameraProtocol } from '@/components/devices/CameraFormDialog.vue'
 import SnapshotTestDialog from '@/components/devices/SnapshotTestDialog.vue'
 import LiveStreamDialog from '@/components/devices/LiveStreamDialog.vue'
@@ -13,6 +15,11 @@ import {
   type Status,
   type TreeNode,
 } from '@/utils/devicesCamerasMock'
+
+const auth = useAuthStore()
+const canCreateCamera = computed(() => auth.hasPermission('devices.cameras.create'))
+const canEditCamera = computed(() => auth.hasPermission('devices.cameras.edit'))
+const canDeleteCamera = computed(() => auth.hasPermission('devices.cameras.delete'))
 
 const GROUPS_KEY = 'edge_camera_groups_v1'
 const DEFAULT_GROUP_ID = 'default'
@@ -422,7 +429,7 @@ function openLive(c: Camera) {
         <div class="mt-1 text-xs text-zinc-500">支持分组、查询与基础运维动作（演示）。</div>
       </div>
       <div class="flex items-center gap-2">
-        <el-button type="primary" @click="openCreate">新增摄像头</el-button>
+        <el-button v-if="canCreateCamera" type="primary" @click="openCreate">新增摄像头</el-button>
       </div>
     </div>
 
@@ -432,7 +439,14 @@ function openLive(c: Camera) {
           <div class="text-sm font-semibold">分组</div>
           <div class="flex items-center gap-2">
             <span class="text-xs text-zinc-500">{{ groupLabelById(selectedGroupId) }}</span>
-            <el-button link type="primary" size="small" :disabled="!groupRootNode" @click="groupRootNode && createGroup(groupRootNode)">
+            <el-button
+              v-if="canEditCamera"
+              link
+              type="primary"
+              size="small"
+              :disabled="!groupRootNode"
+              @click="groupRootNode && createGroup(groupRootNode)"
+            >
               新增
             </el-button>
           </div>
@@ -458,7 +472,7 @@ function openLive(c: Camera) {
                   <span class="truncate">{{ data.label }}</span>
                   <span class="ml-2 text-xs text-zinc-500">{{ getStats(data.id).online }}/{{ getStats(data.id).total }}</span>
                 </div>
-                <el-dropdown trigger="click" @click.stop>
+                <el-dropdown v-if="canEditCamera" trigger="click" @click.stop>
                   <el-button link type="primary" size="small" @click.stop>⋯</el-button>
                   <template #dropdown>
                     <el-dropdown-menu>
@@ -531,12 +545,12 @@ function openLive(c: Camera) {
                 <div class="flex items-center gap-2">
                   <el-button link type="primary" size="small" @click="openSnapshot(scope.row)">抓图测试</el-button>
                   <el-button link type="primary" size="small" @click="openLive(scope.row)">直播流</el-button>
-                  <el-dropdown trigger="click">
+                  <el-dropdown v-if="canEditCamera || canDeleteCamera" trigger="click">
                     <el-button link type="primary" size="small">更多</el-button>
                     <template #dropdown>
                       <el-dropdown-menu>
-                        <el-dropdown-item @click="openEdit(scope.row)">编辑</el-dropdown-item>
-                        <el-dropdown-item @click="removeCamera(scope.row)">删除</el-dropdown-item>
+                        <el-dropdown-item v-if="canEditCamera" @click="openEdit(scope.row)">编辑</el-dropdown-item>
+                        <el-dropdown-item v-if="canDeleteCamera" @click="removeCamera(scope.row)">删除</el-dropdown-item>
                       </el-dropdown-menu>
                     </template>
                   </el-dropdown>

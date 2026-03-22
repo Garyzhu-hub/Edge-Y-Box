@@ -1,6 +1,8 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { formatDateTime } from '@/stores/app'
+import { useAuthStore } from '@/stores/auth'
 import DeploymentDialog from '@/components/deployments/DeploymentDialog.vue'
 import DeploymentResultsDialog from '@/components/deployments/DeploymentResultsDialog.vue'
 import {
@@ -17,6 +19,11 @@ import { loadAlarmSettings } from '@/utils/alarmSettingsStore'
 import { nextDetectionId } from '@/utils/detectionId'
 import { createWorkOrderFromAlarm, recoverWorkOrdersByCamera } from '@/utils/workOrdersStore'
 import type { Algorithm } from '@/utils/algorithmsMock'
+
+const auth = useAuthStore()
+const canCreateDeployment = computed(() => auth.hasPermission('deployments.create'))
+const canEditDeployment = computed(() => auth.hasPermission('deployments.edit'))
+const canDeleteDeployment = computed(() => auth.hasPermission('deployments.delete'))
 
 const STORAGE_KEY = 'edge_deployments_v1'
 const ALGORITHMS_KEY = 'edge_algorithms_v1'
@@ -347,7 +354,7 @@ async function simulateAlarm(d: Deployment) {
   }
   const enabledInstances = d.instances.filter((x) => x.enabled)
   if (!enabledInstances.length) {
-    ElMessage.warning('暂无启用的算法实例')
+    ElMessage.warning('暂无启用的算法规则')
     return
   }
   const ins = enabledInstances[Math.floor(Math.random() * enabledInstances.length)]
@@ -436,10 +443,10 @@ async function simulateRecover(d: Deployment) {
     <div class="flex flex-wrap items-end justify-between gap-3">
       <div>
         <div class="text-base font-semibold">布点管理</div>
-        <div class="mt-1 text-xs text-zinc-500">管理摄像头与算法实例的绑定关系（演示）。</div>
+        <div class="mt-1 text-xs text-zinc-500">布点级 ROI 与算法规则（演示存储：localStorage）。</div>
       </div>
       <div class="flex items-center gap-2">
-        <el-button type="primary" @click="openCreate">新增布点</el-button>
+        <el-button v-if="canCreateDeployment" type="primary" @click="openCreate">新增布点</el-button>
       </div>
     </div>
 
@@ -473,7 +480,7 @@ async function simulateRecover(d: Deployment) {
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="算法实例" width="110">
+        <el-table-column label="规则数" width="110">
           <template #default="scope">
             <span class="font-mono text-xs">{{ scope.row.instances.length }}</span>
           </template>
@@ -500,13 +507,14 @@ async function simulateRecover(d: Deployment) {
         </el-table-column>
         <el-table-column label="操作" width="280" fixed="right">
           <template #default="scope">
-            <div class="flex items-center gap-2">
-              <el-button link type="primary" size="small" @click="openEdit(scope.row)">编辑</el-button>
+            <div class="flex flex-wrap items-center gap-2">
+              <el-button v-if="canEditDeployment" link type="primary" size="small" @click="openEdit(scope.row)">编辑</el-button>
               <el-button link type="primary" size="small" @click="openResults(scope.row)">查看结果</el-button>
-              <el-button link type="primary" size="small" @click="toggleEnable(scope.row)">
+              <el-button v-if="canEditDeployment" link type="primary" size="small" @click="toggleEnable(scope.row)">
                 {{ scope.row.status === '已启用' ? '停用' : '启用' }}
               </el-button>
               <el-button
+                v-if="canEditDeployment"
                 link
                 type="primary"
                 size="small"
@@ -515,14 +523,14 @@ async function simulateRecover(d: Deployment) {
               >
                 {{ scope.row.runStatus === '运行中' ? '暂停' : '恢复' }}
               </el-button>
-              <el-dropdown trigger="click">
+              <el-dropdown v-if="canEditDeployment || canDeleteDeployment" trigger="click">
                 <el-button link type="primary" size="small">更多</el-button>
                 <template #dropdown>
                   <el-dropdown-menu>
-                    <el-dropdown-item @click="simulateAlarm(scope.row)">模拟告警</el-dropdown-item>
-                    <el-dropdown-item @click="simulateRecover(scope.row)">巡检恢复</el-dropdown-item>
-                    <el-dropdown-item @click="resetParams(scope.row)">参数重置</el-dropdown-item>
-                    <el-dropdown-item @click="removeDeployment(scope.row)">删除</el-dropdown-item>
+                    <el-dropdown-item v-if="canEditDeployment" @click="simulateAlarm(scope.row)">模拟告警</el-dropdown-item>
+                    <el-dropdown-item v-if="canEditDeployment" @click="simulateRecover(scope.row)">巡检恢复</el-dropdown-item>
+                    <el-dropdown-item v-if="canEditDeployment" @click="resetParams(scope.row)">参数重置</el-dropdown-item>
+                    <el-dropdown-item v-if="canDeleteDeployment" @click="removeDeployment(scope.row)">删除</el-dropdown-item>
                   </el-dropdown-menu>
                 </template>
               </el-dropdown>
