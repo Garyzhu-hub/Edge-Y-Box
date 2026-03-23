@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { useAppStore, formatDateTime } from '@/stores/app'
+import { defaultTodayRangeDates, formatDateTime } from '@/stores/app'
 import { useAuthStore } from '@/stores/auth'
 import WorkOrderStatusTag, { type WorkOrderStatus } from '@/components/workOrders/WorkOrderStatusTag.vue'
 import { ElMessage } from 'element-plus'
@@ -47,8 +47,6 @@ const route = useRoute()
 const router = useRouter()
 const auth = useAuthStore()
 const canEditWorkOrder = computed(() => auth.hasPermission('workOrders.edit'))
-const app = useAppStore()
-
 const filter = reactive<FilterModel>({
   workOrderId: '',
   camera: '',
@@ -58,12 +56,11 @@ const filter = reactive<FilterModel>({
   range: null,
 })
 
-const followGlobalRange = ref(true)
 const internalUpdatingRange = ref(false)
 
-function setRangeFromGlobal() {
+function setDefaultRange() {
   internalUpdatingRange.value = true
-  filter.range = [new Date(app.timeRange.fromMs), new Date(app.timeRange.toMs)]
+  filter.range = defaultTodayRangeDates()
   internalUpdatingRange.value = false
 }
 
@@ -151,8 +148,9 @@ function makeMockWorkOrders(fromMs: number, toMs: number) {
 
 function ensureSeeded() {
   const existing = loadWorkOrders()
-  const from = filter.range ? filter.range[0].getTime() : app.timeRange.fromMs
-  const to = filter.range ? filter.range[1].getTime() : app.timeRange.toMs
+  const r = filter.range ?? defaultTodayRangeDates()
+  const from = r[0].getTime()
+  const to = r[1].getTime()
   const toDayEnd = to + 24 * 60 * 60 * 1000 - 1
 
   if (existing.length) {
@@ -233,8 +231,7 @@ function onReset() {
   filter.alarmType = ''
   filter.level = ''
   filter.status = ''
-  followGlobalRange.value = true
-  setRangeFromGlobal()
+  setDefaultRange()
   page.value = 1
   refresh()
 }
@@ -262,31 +259,15 @@ function restoreCount(wo: WorkOrder) {
 watch([page, pageSize], () => refresh())
 
 watch(
-  () => app.timeRange,
-  () => {
-    if (!followGlobalRange.value) return
-    setRangeFromGlobal()
-    page.value = 1
-    refresh()
-  },
-  { deep: true }
-)
-
-watch(
   () => filter.range,
   (v) => {
     if (internalUpdatingRange.value) return
-    if (!v) {
-      followGlobalRange.value = true
-      setRangeFromGlobal()
-      return
-    }
-    followGlobalRange.value = false
+    if (!v) setDefaultRange()
   }
 )
 
 onMounted(() => {
-  setRangeFromGlobal()
+  setDefaultRange()
   ensureSeeded()
   refresh()
 })
@@ -294,45 +275,51 @@ onMounted(() => {
 
 <template>
   <div class="space-y-4">
-    <div>
-      <div class="text-base font-semibold">告警工单</div>
-      <div class="mt-1 text-xs text-zinc-500">工单由规则触发生成，支持处置与关闭（演示）。</div>
-    </div>
-
-    <div class="flex justify-end">
-      <el-button v-if="canEditWorkOrder" @click="runPatrol">模拟巡检</el-button>
+    <div class="flex flex-wrap items-end justify-between gap-3">
+      <div>
+        <div class="text-base font-semibold">告警工单</div>
+        <div class="mt-1 text-xs text-zinc-500">工单由规则触发生成，支持处置与关闭（演示）。</div>
+      </div>
+      <div class="flex shrink-0 items-center gap-2">
+        <el-button v-if="canEditWorkOrder" @click="runPatrol">模拟巡检</el-button>
+      </div>
     </div>
 
     <el-card>
-      <div class="grid grid-cols-1 gap-3 md:grid-cols-6">
-        <el-input v-model="filter.workOrderId" placeholder="工单号" clearable />
-        <el-input v-model="filter.camera" placeholder="摄像头名称" clearable />
+      <div class="space-y-3">
+        <div
+          class="grid w-full min-w-0 gap-3 [grid-template-columns:repeat(auto-fill,minmax(min(100%,280px),1fr))]"
+        >
+          <el-input v-model="filter.workOrderId" placeholder="工单号" clearable />
+          <el-input v-model="filter.camera" placeholder="摄像头名称" clearable />
 
-        <el-select v-model="filter.alarmType" placeholder="报警类型" clearable>
-          <el-option v-for="t in allTypes" :key="t" :label="t" :value="t" />
-        </el-select>
+          <el-select v-model="filter.alarmType" placeholder="报警类型" clearable>
+            <el-option v-for="t in allTypes" :key="t" :label="t" :value="t" />
+          </el-select>
 
-        <el-select v-model="filter.level" placeholder="报警等级" clearable>
-          <el-option v-for="lv in allLevels" :key="lv" :label="lv" :value="lv" />
-        </el-select>
+          <el-select v-model="filter.level" placeholder="报警等级" clearable>
+            <el-option v-for="lv in allLevels" :key="lv" :label="lv" :value="lv" />
+          </el-select>
 
-        <el-select v-model="filter.status" placeholder="工单状态" clearable>
-          <el-option v-for="s in allStatuses" :key="s" :label="s" :value="s" />
-        </el-select>
+          <el-select v-model="filter.status" placeholder="工单状态" clearable>
+            <el-option v-for="s in allStatuses" :key="s" :label="s" :value="s" />
+          </el-select>
 
-        <el-date-picker
-          v-model="filter.range"
-          type="daterange"
-          unlink-panels
-          range-separator="~"
-          start-placeholder="开始"
-          end-placeholder="结束"
-        />
-      </div>
+          <el-date-picker
+            v-model="filter.range"
+            type="daterange"
+            unlink-panels
+            class="!w-full"
+            range-separator="~"
+            start-placeholder="开始"
+            end-placeholder="结束"
+          />
+        </div>
 
-      <div class="mt-3 flex items-center justify-end gap-2">
-        <el-button @click="onReset">重置</el-button>
-        <el-button type="primary" :loading="loading" @click="onSearch">搜索</el-button>
+        <div class="flex justify-end gap-2">
+          <el-button @click="onReset">重置</el-button>
+          <el-button type="primary" :loading="loading" @click="onSearch">搜索</el-button>
+        </div>
       </div>
     </el-card>
 

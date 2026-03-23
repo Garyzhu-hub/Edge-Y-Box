@@ -33,6 +33,14 @@ function parseMs(v: unknown): number | null {
   return n
 }
 
+/** 各列表页本地筛选默认时间窗（与全局看板 store 解耦） */
+export function defaultTodayRangeDates(): [Date, Date] {
+  const now = new Date()
+  const from = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  const to = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999)
+  return [from, to]
+}
+
 export const useAppStore = defineStore('app', () => {
   const timePreset = ref<TimeRangePreset>('today')
   const customFromMs = ref<number | null>(null)
@@ -82,6 +90,7 @@ export const useAppStore = defineStore('app', () => {
   }
 
   function syncFromRoute(route: RouteLocationNormalized) {
+    if (route.name !== 'dashboard') return
     const range = typeof route.query.range === 'string' ? route.query.range : null
     const from = parseMs(route.query.from)
     const to = parseMs(route.query.to)

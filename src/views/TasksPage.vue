@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { useAppStore, formatDateTime } from '@/stores/app'
+import { defaultTodayRangeDates, formatDateTime } from '@/stores/app'
 import { useAuthStore } from '@/stores/auth'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import SnapshotTaskFormDialog from '@/components/tasks/SnapshotTaskFormDialog.vue'
@@ -35,8 +35,6 @@ type FilterModel = {
   range: [Date, Date] | null
 }
 
-const app = useAppStore()
-
 const filter = reactive<FilterModel>({
   keyword: '',
   status: '',
@@ -44,12 +42,11 @@ const filter = reactive<FilterModel>({
   range: null,
 })
 
-const followGlobalRange = ref(true)
 const internalUpdatingRange = ref(false)
 
-function setRangeFromGlobal() {
+function setDefaultRange() {
   internalUpdatingRange.value = true
-  filter.range = [new Date(app.timeRange.fromMs), new Date(app.timeRange.toMs)]
+  filter.range = defaultTodayRangeDates()
   internalUpdatingRange.value = false
 }
 
@@ -269,8 +266,7 @@ function onReset() {
   filter.keyword = ''
   filter.status = ''
   filter.lastRunStatus = ''
-  followGlobalRange.value = true
-  setRangeFromGlobal()
+  setDefaultRange()
   page.value = 1
   refresh()
 }
@@ -281,29 +277,12 @@ watch(
   () => filter.range,
   (v) => {
     if (internalUpdatingRange.value) return
-    if (!v) {
-      followGlobalRange.value = true
-      setRangeFromGlobal()
-      return
-    }
-    followGlobalRange.value = false
+    if (!v) setDefaultRange()
   }
 )
 
-watch(
-  () => app.timeRange,
-  () => {
-    if (!followGlobalRange.value) return
-    setRangeFromGlobal()
-    ensureMockDataInRange()
-    page.value = 1
-    refresh()
-  },
-  { deep: true }
-)
-
 onMounted(() => {
-  setRangeFromGlobal()
+  setDefaultRange()
   ensureMockDataInRange()
   refresh()
 })
@@ -432,26 +411,31 @@ function openDeviceRun(payload: { run: TaskRun }) {
     </div>
 
     <el-card>
-      <div class="grid grid-cols-1 gap-3 md:grid-cols-5">
-        <el-input v-model="filter.keyword" placeholder="任务名称/ID" clearable />
-        <el-select v-model="filter.status" placeholder="任务状态" clearable>
-          <el-option label="已启用" value="已启用" />
-          <el-option label="已停用" value="已停用" />
-        </el-select>
-        <el-select v-model="filter.lastRunStatus" placeholder="最近结果" clearable>
-          <el-option label="成功" value="成功" />
-          <el-option label="失败" value="失败" />
-          <el-option label="执行中" value="执行中" />
-        </el-select>
-        <el-date-picker
-          v-model="filter.range"
-          type="daterange"
-          unlink-panels
-          range-separator="~"
-          start-placeholder="开始"
-          end-placeholder="结束"
-        />
-        <div class="flex items-center justify-end gap-2">
+      <div class="space-y-3">
+        <div
+          class="grid w-full min-w-0 gap-3 [grid-template-columns:repeat(auto-fill,minmax(min(100%,280px),1fr))]"
+        >
+          <el-input v-model="filter.keyword" placeholder="任务名称/ID" clearable />
+          <el-select v-model="filter.status" placeholder="任务状态" clearable>
+            <el-option label="已启用" value="已启用" />
+            <el-option label="已停用" value="已停用" />
+          </el-select>
+          <el-select v-model="filter.lastRunStatus" placeholder="最近结果" clearable>
+            <el-option label="成功" value="成功" />
+            <el-option label="失败" value="失败" />
+            <el-option label="执行中" value="执行中" />
+          </el-select>
+          <el-date-picker
+            v-model="filter.range"
+            type="daterange"
+            unlink-panels
+            class="!w-full"
+            range-separator="~"
+            start-placeholder="开始"
+            end-placeholder="结束"
+          />
+        </div>
+        <div class="flex justify-end gap-2">
           <el-button @click="onReset">重置</el-button>
           <el-button type="primary" :loading="loading" @click="onSearch">搜索</el-button>
         </div>

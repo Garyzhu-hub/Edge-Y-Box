@@ -3,9 +3,8 @@ import type { AlarmRecord } from '@/components/alarms/AlarmDetailDialog.vue'
 import AlarmDetailDialog from '@/components/alarms/AlarmDetailDialog.vue'
 import { useRouter, useRoute } from 'vue-router'
 import { computed } from 'vue'
-import { formatDateTime } from '@/stores/app'
+import { defaultTodayRangeDates, formatDateTime } from '@/stores/app'
 import { useAuthStore } from '@/stores/auth'
-import { useAppStore } from '@/stores/app'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { createWorkOrderFromAlarm } from '@/utils/workOrdersStore'
 import { loadAlarmRecords, appendAlarmRecord, loadDeletedAlarmRecordIds, removeAlarmRecordsByIds } from '@/utils/alarmRecordsStore'
@@ -26,7 +25,6 @@ type FilterModel = {
 
 const router = useRouter()
 const route = useRoute()
-const app = useAppStore()
 const alarmCenter = useAlarmCenterStore()
 
 const auth = useAuthStore()
@@ -51,12 +49,11 @@ const page = ref(1)
 const pageSize = ref(10)
 const total = ref(0)
 
-const followGlobalRange = ref(true)
 const internalUpdatingRange = ref(false)
 
-function setRangeFromGlobal() {
+function setDefaultRange() {
   internalUpdatingRange.value = true
-  filter.range = [new Date(app.timeRange.fromMs), new Date(app.timeRange.toMs)]
+  filter.range = defaultTodayRangeDates()
   internalUpdatingRange.value = false
 }
 
@@ -252,8 +249,7 @@ function onReset() {
   filter.level = ''
   filter.workOrderId = ''
   filter.status = ''
-  followGlobalRange.value = true
-  setRangeFromGlobal()
+  setDefaultRange()
   page.value = 1
   fetchData()
 }
@@ -262,7 +258,7 @@ watch([page, pageSize], () => fetchData())
 
 onMounted(() => {
   if (route.query.view === 'grid') viewMode.value = 'grid'
-  setRangeFromGlobal()
+  setDefaultRange()
   ensureMockDataInRange()
   fetchData()
 })
@@ -352,27 +348,10 @@ function deleteSelected() {
 }
 
 watch(
-  () => app.timeRange,
-  () => {
-    if (!followGlobalRange.value) return
-    setRangeFromGlobal()
-    ensureMockDataInRange()
-    page.value = 1
-    fetchData()
-  },
-  { deep: true }
-)
-
-watch(
   () => filter.range,
   (v) => {
     if (internalUpdatingRange.value) return
-    if (!v) {
-      followGlobalRange.value = true
-      setRangeFromGlobal()
-      return
-    }
-    followGlobalRange.value = false
+    if (!v) setDefaultRange()
   }
 )
 
@@ -418,37 +397,43 @@ function tagType(level: AlarmLevel) {
         <div>最近刷新：{{ lastRefreshAtMs ? formatDateTime(lastRefreshAtMs) : '尚未刷新' }}</div>
         <div v-if="lastRefreshError" class="mt-1 text-red-600">刷新失败：{{ lastRefreshError }}</div>
       </div>
-      <div class="grid grid-cols-1 gap-3 md:grid-cols-6">
-        <el-input v-model="filter.camera" placeholder="摄像头名称" clearable />
+      <!-- auto-fill：容器变窄时六项（含时间）自动换行，避免日期单独占一行显得突兀 -->
+      <div class="space-y-3">
+        <div
+          class="grid w-full min-w-0 gap-3 [grid-template-columns:repeat(auto-fill,minmax(min(100%,280px),1fr))]"
+        >
+          <el-input v-model="filter.camera" placeholder="摄像头名称" clearable />
 
-        <el-select v-model="filter.alarmType" placeholder="报警类型" clearable>
-          <el-option v-for="t in allTypes" :key="t" :label="t" :value="t" />
-        </el-select>
+          <el-select v-model="filter.alarmType" placeholder="报警类型" clearable>
+            <el-option v-for="t in allTypes" :key="t" :label="t" :value="t" />
+          </el-select>
 
-        <el-select v-model="filter.level" placeholder="报警等级" clearable>
-          <el-option v-for="lv in allLevels" :key="lv" :label="lv" :value="lv" />
-        </el-select>
+          <el-select v-model="filter.level" placeholder="报警等级" clearable>
+            <el-option v-for="lv in allLevels" :key="lv" :label="lv" :value="lv" />
+          </el-select>
 
-        <el-input v-model="filter.workOrderId" placeholder="告警单号/工单号" clearable />
+          <el-input v-model="filter.workOrderId" placeholder="告警单号/工单号" clearable />
 
-        <el-select v-model="filter.status" placeholder="告警状态" clearable>
-          <el-option label="异常" value="异常" />
-          <el-option label="恢复" value="恢复" />
-        </el-select>
+          <el-select v-model="filter.status" placeholder="告警状态" clearable>
+            <el-option label="异常" value="异常" />
+            <el-option label="恢复" value="恢复" />
+          </el-select>
 
-        <el-date-picker
-          v-model="filter.range"
-          type="daterange"
-          unlink-panels
-          range-separator="~"
-          start-placeholder="开始"
-          end-placeholder="结束"
-        />
-      </div>
+          <el-date-picker
+            v-model="filter.range"
+            type="daterange"
+            unlink-panels
+            class="!w-full"
+            range-separator="~"
+            start-placeholder="开始"
+            end-placeholder="结束"
+          />
+        </div>
 
-      <div class="mt-3 flex items-center justify-end gap-2">
-        <el-button @click="onReset">重置</el-button>
-        <el-button type="primary" :loading="loading" @click="onSearch">搜索</el-button>
+        <div class="flex justify-end gap-2">
+          <el-button @click="onReset">重置</el-button>
+          <el-button type="primary" :loading="loading" @click="onSearch">搜索</el-button>
+        </div>
       </div>
     </el-card>
 

@@ -5,7 +5,9 @@ import AlarmCenterOverlay from '@/components/alarms/AlarmCenterOverlay.vue'
 </script>
 
 <template>
-  <div class="h-screen w-screen overflow-hidden bg-zinc-50 text-zinc-900">
+  <div
+    class="h-screen w-screen overflow-hidden bg-zinc-50 text-zinc-900 dark:bg-zinc-950 dark:text-zinc-100"
+  >
     <div class="flex h-full">
       <SideNav />
       <div class="flex min-w-0 flex-1 flex-col">

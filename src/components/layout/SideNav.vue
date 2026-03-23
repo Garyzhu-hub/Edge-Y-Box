@@ -31,14 +31,18 @@ const activeIndex = computed(() => {
 </script>
 
 <template>
-  <aside class="h-full w-[248px] border-r border-zinc-200 bg-white">
-    <div class="flex h-14 items-center gap-2 border-b border-zinc-200 px-4">
+  <aside
+    class="h-full w-[248px] border-r border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900"
+  >
+    <div
+      class="flex h-14 items-center gap-2 border-b border-zinc-200 px-4 dark:border-zinc-800"
+    >
       <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-zinc-900 text-white">
         <img :src="logoYeUrl" alt="Edge Y-box" class="h-5 w-5 object-contain">
       </div>
       <div class="min-w-0">
         <div class="truncate text-sm font-semibold">Edge Y-box</div>
-        <div class="truncate text-xs text-zinc-500">边缘AI视觉巡检平台</div>
+        <div class="truncate text-xs text-zinc-500 dark:text-zinc-400">边缘AI视觉巡检平台</div>
       </div>
     </div>
 
@@ -57,7 +61,7 @@ const activeIndex = computed(() => {
                   <component
                     v-if="item.icon"
                     :is="item.icon"
-                    class="h-4 w-4 text-zinc-600"
+                    class="h-4 w-4 text-zinc-600 dark:text-zinc-400"
                   />
                   <span class="text-sm">{{ item.label }}</span>
                 </span>
@@ -72,7 +76,7 @@ const activeIndex = computed(() => {
                   <component
                     v-if="child.icon"
                     :is="child.icon"
-                    class="h-4 w-4 text-zinc-600"
+                    class="h-4 w-4 text-zinc-600 dark:text-zinc-400"
                   />
                   <span class="text-sm">{{ child.label }}</span>
                 </span>
@@ -84,7 +88,7 @@ const activeIndex = computed(() => {
                 <component
                   v-if="item.icon"
                   :is="item.icon"
-                  class="h-4 w-4 text-zinc-600"
+                  class="h-4 w-4 text-zinc-600 dark:text-zinc-400"
                 />
                 <span class="text-sm">{{ item.label }}</span>
               </span>

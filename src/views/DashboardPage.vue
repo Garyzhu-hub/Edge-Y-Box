@@ -1,6 +1,8 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { useAppStore, formatDateTime } from '@/stores/app'
+import TimeRangeControl from '@/components/layout/TimeRangeControl.vue'
 import OnlineOverview from '@/components/dashboard/OnlineOverview.vue'
 import QuickActions from '@/components/dashboard/QuickActions.vue'
 import TodayTrend from '@/components/dashboard/TodayTrend.vue'
@@ -33,6 +35,19 @@ function makeTrend(fromMs: number, toMs: number, buckets: number, seed: number):
 }
 
 const app = useAppStore()
+const route = useRoute()
+const router = useRouter()
+
+watch(
+  () => [app.timePreset, app.customFromMs, app.customToMs],
+  () => {
+    const next = { ...route.query, ...app.buildRangeQuery() }
+    const a = JSON.stringify(route.query)
+    const b = JSON.stringify(next)
+    if (a !== b) router.replace({ query: next })
+  },
+  { deep: true }
+)
 
 const headline = computed(() => {
   const tr = app.timeRange
@@ -62,6 +77,10 @@ const trend = computed(() => {
         <div class="mt-1 text-xs text-zinc-500">
           时间范围：{{ headline.rangeLabel }}（{{ headline.from }} ~ {{ headline.to }}）
         </div>
+      </div>
+      <div class="flex shrink-0 items-center gap-2">
+        <span class="hidden text-xs text-zinc-500 dark:text-zinc-400 sm:inline">看板时间</span>
+        <TimeRangeControl />
       </div>
     </div>
 

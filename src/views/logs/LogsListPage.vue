@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { ElMessage } from 'element-plus'
-import { useAppStore, formatDateTime } from '@/stores/app'
+import { defaultTodayRangeDates, formatDateTime } from '@/stores/app'
 import { useAuthStore } from '@/stores/auth'
 import LogDetailDrawer from '@/components/logs/LogDetailDrawer.vue'
 import {
@@ -15,7 +15,6 @@ import {
 
 const props = defineProps<{ kind: LogKind; title?: string }>()
 
-const app = useAppStore()
 const auth = useAuthStore()
 
 const exportPermissionId = computed(() => {
@@ -43,12 +42,11 @@ const filter = reactive<FilterModel>({
   range: null,
 })
 
-const followGlobalRange = ref(true)
 const internalUpdatingRange = ref(false)
 
-function setRangeFromGlobal() {
+function setDefaultRange() {
   internalUpdatingRange.value = true
-  filter.range = [new Date(app.timeRange.fromMs), new Date(app.timeRange.toMs)]
+  filter.range = defaultTodayRangeDates()
   internalUpdatingRange.value = false
 }
 
@@ -119,8 +117,7 @@ function onReset() {
   filter.level = ''
   filter.module = ''
   filter.operator = ''
-  followGlobalRange.value = true
-  setRangeFromGlobal()
+  setDefaultRange()
   page.value = 1
   refresh()
 }
@@ -131,29 +128,12 @@ watch(
   () => filter.range,
   (v) => {
     if (internalUpdatingRange.value) return
-    if (!v) {
-      followGlobalRange.value = true
-      setRangeFromGlobal()
-      return
-    }
-    followGlobalRange.value = false
+    if (!v) setDefaultRange()
   }
 )
 
-watch(
-  () => app.timeRange,
-  () => {
-    if (!followGlobalRange.value) return
-    setRangeFromGlobal()
-    ensureMockDataInRange()
-    page.value = 1
-    refresh()
-  },
-  { deep: true }
-)
-
 onMounted(() => {
-  setRangeFromGlobal()
+  setDefaultRange()
   ensureMockDataInRange()
   refresh()
 })
@@ -206,26 +186,31 @@ const moduleOptions = computed(() => modulesByKind(props.kind))
     </div>
 
     <el-card>
-      <div class="grid grid-cols-1 gap-3 md:grid-cols-7">
-        <el-input v-model="filter.keyword" placeholder="关键词/ID/RequestId" clearable />
-        <el-select v-model="filter.module" placeholder="模块" clearable>
-          <el-option v-for="m in moduleOptions" :key="m" :label="m" :value="m" />
-        </el-select>
-        <el-select v-model="filter.level" placeholder="等级" clearable>
-          <el-option label="INFO" value="info" />
-          <el-option label="WARN" value="warn" />
-          <el-option label="ERROR" value="error" />
-        </el-select>
-        <el-input v-model="filter.operator" placeholder="操作者" clearable />
-        <el-date-picker
-          v-model="filter.range"
-          type="daterange"
-          unlink-panels
-          range-separator="~"
-          start-placeholder="开始"
-          end-placeholder="结束"
-        />
-        <div class="md:col-span-2 flex items-center justify-end gap-2">
+      <div class="space-y-3">
+        <div
+          class="grid w-full min-w-0 gap-3 [grid-template-columns:repeat(auto-fill,minmax(min(100%,280px),1fr))]"
+        >
+          <el-input v-model="filter.keyword" placeholder="关键词/ID/RequestId" clearable />
+          <el-select v-model="filter.module" placeholder="模块" clearable>
+            <el-option v-for="m in moduleOptions" :key="m" :label="m" :value="m" />
+          </el-select>
+          <el-select v-model="filter.level" placeholder="等级" clearable>
+            <el-option label="INFO" value="info" />
+            <el-option label="WARN" value="warn" />
+            <el-option label="ERROR" value="error" />
+          </el-select>
+          <el-input v-model="filter.operator" placeholder="操作者" clearable />
+          <el-date-picker
+            v-model="filter.range"
+            type="daterange"
+            unlink-panels
+            class="!w-full"
+            range-separator="~"
+            start-placeholder="开始"
+            end-placeholder="结束"
+          />
+        </div>
+        <div class="flex justify-end gap-2">
           <el-button @click="onReset">重置</el-button>
           <el-button type="primary" :loading="loading" @click="onSearch">搜索</el-button>
         </div>

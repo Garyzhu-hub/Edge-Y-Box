@@ -32,8 +32,13 @@ function onCustomChange(v: [Date, Date] | null) {
 </script>
 
 <template>
-  <div class="flex items-center gap-2">
-    <el-select v-model="presetModel" size="small" class="w-[120px]">
+  <div class="flex min-w-0 items-center gap-2">
+    <!-- min-w + shrink-0：避免在 flex 父级中被压成极窄条，选中项文案要能完整展示 -->
+    <el-select
+      v-model="presetModel"
+      size="small"
+      class="!w-[148px] shrink-0 !min-w-[148px]"
+    >
       <el-option
         v-for="opt in options"
         :key="opt.value"

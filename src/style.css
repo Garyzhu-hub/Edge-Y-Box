@@ -28,3 +28,31 @@
   display: flex;
   align-items: center;
 }
+
+/* 深色模式：与 Tailwind 原子类配合，减少各页面逐处加 dark: */
+@layer components {
+  html.dark .border-zinc-200 {
+    @apply border-zinc-800;
+  }
+  html.dark .border-zinc-300 {
+    @apply border-zinc-700;
+  }
+  html.dark .bg-white {
+    @apply bg-zinc-900;
+  }
+  html.dark .bg-zinc-50 {
+    @apply bg-zinc-950;
+  }
+  html.dark .text-zinc-900 {
+    @apply text-zinc-100;
+  }
+  html.dark .text-zinc-800 {
+    @apply text-zinc-200;
+  }
+  html.dark .text-zinc-700 {
+    @apply text-zinc-300;
+  }
+  html.dark .text-zinc-600 {
+    @apply text-zinc-400;
+  }
+}
